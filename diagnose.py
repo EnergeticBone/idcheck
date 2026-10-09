@@ -1,6 +1,6 @@
 import sys, glob, yaml
 import numpy as np
-from adapters.mot import load_mot_gt, load_fps
+from adapters.mot import load_mot_gt, load_fps, load_seqinfo
 from core.config import scale_cfg
 from core.inject import inject_many
 from core.rules import run_rules, iou
@@ -34,8 +34,9 @@ for t in truths:
         print(f"track {t['a']} sau frame {t['frame']}: thiếu {nxt - t['frame'] - 1} frame | "
               f"occluded trước={tr.boxes[t['frame']].occluded}, sau={tr.boxes[nxt].occluded}")
 
+fsz = load_seqinfo(gt)
 print("\n== merge gợi ý trên dữ liệu SẠCH ==")
-for m in suggest_merges(clean, cfg):
+for m in suggest_merges(clean, cfg, frame_size=fsz):
     A, B = clean[m["a"]], clean[m["b"]]
     print(f"{m['a']} -> {m['b']} score {m['score']} | A kết thúc f{A.end}, "
           f"B bắt đầu f{B.start}, cách {B.start - A.end} frame")

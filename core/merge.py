@@ -5,7 +5,7 @@ from scipy.optimize import linear_sum_assignment
 from core.rules import center, size, params
 
 BIG = 1e6
-DEFAULTS = dict(max_merge_gap=30, max_merge_dist=2.0, max_merge_scale=2.0)
+DEFAULTS = dict(max_merge_gap=30, max_merge_dist=2.0, max_merge_scale=2.0, merge_max_cost=3.5)
 
 
 def _p(cfg, label):
@@ -65,8 +65,7 @@ def suggest_merges(tracks, cfg, min_score=0.0, frame_size=None):
             geo[i, j] = g                  # dùng cho score
             cost[i, j] = g + 0.05 * gap    # dùng cho ghép cặp
 
-    d = _p(cfg, None)
-    reject = 0.5 * (d["max_merge_dist"] + 0.05 * d["max_merge_gap"])
+    reject = 0.5 * _p(cfg, None)["merge_max_cost"]
     M = np.full((2 * n, 2 * n), BIG)
     M[:n, :n] = cost
     M[n:, n:] = 0.0

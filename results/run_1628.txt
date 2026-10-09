@@ -1,0 +1,81 @@
+##### PYTEST
+................................                                         [100%]
+32 passed in 4.00s
+
+##### EVAL_ALL (tune, đã co giãn fps)
+
+== LUẬT | tập tune: MOT17-02-FRCNN, MOT17-05-FRCNN, MOT17-09-FRCNN, MOT17-11-FRCNN ==
+cảnh báo trên dữ liệu SẠCH: 0 / 2862 frame = 0.00 mỗi 100 frame  {}
+loại         truth  recall    tp  base  side    fp  precision
+gap             93    1.00    93     0     0     0       1.00
+jump            93    0.94    87     0    81     0       1.00
+class_flip      90    1.00    90     0     0     0       1.00
+duplicate       88    1.00    88     0     0     4       0.96
+switch          90    0.57    51     0     0     0       1.00
+
+== MERGE (fragment) ==
+score>=   truth  sugg   tp  base   fp   prec  recall
+0.0          94   324   76   150   98   0.44    0.81
+0.3          94   256   72   108   76   0.49    0.77
+0.5          94   197   72    78   47   0.61    0.77
+0.7          94   118   70    37   11   0.86    0.74
+
+recall theo độ dài gap (số frame giữa hai đoạn):
+  score>=0.0: 2-5: 9/13 | 6-12: 26/33 | 13-+: 41/48
+  score>=0.3: 2-5: 9/13 | 6-12: 25/33 | 13-+: 38/48
+  score>=0.5: 2-5: 9/13 | 6-12: 25/33 | 13-+: 38/48
+  score>=0.7: 2-5: 9/13 | 6-12: 23/33 | 13-+: 38/48
+score>=   truth  sugg   tp  base   fp   prec  strict  recall
+0.0          94   324   76   150   98   0.44    0.23    0.81
+0.3          94   256   72   108   76   0.49    0.28    0.77
+0.5          94   197   72    78   47   0.61    0.37    0.77
+0.7          94   118   70    37   11   0.86    0.59    0.74
+
+##### TUNE_SWITCH
+min_sep  cross  | cảnh báo trên SẠCH | recall switch
+0.1     0.3    | 0                  | 28/30
+0.1     0.5    | 0                  | 29/30
+0.1     0.7    | 2                  | 29/30
+0.2     0.3    | 0                  | 23/30
+0.2     0.5    | 0                  | 23/30
+0.2     0.7    | 0                  | 23/30
+0.3     0.3    | 0                  | 14/30
+0.3     0.5    | 0                  | 14/30
+0.3     0.7    | 0                  | 14/30
+0.5     0.3    | 0                  | 7/30
+0.5     0.5    | 0                  | 7/30
+0.5     0.7    | 0                  | 7/30
+
+##### TUNE_JUMP (04)
+python: can't open file '/home/tran-tuan-kinh/idcheck/tune_jump.py': [Errno 2] No such file or directory
+
+##### DIAGNOSE_MERGE 05
+MOT17-05-FRCNN seed 0: fragment đã chèn 10, tìm lại được 6
+
+SÓT 20->163: gap 11, dist 0.44, tỉ lệ cỡ 1.26, chạm mép False, cost 0.99
+    B đã được nối từ 19: gap 13, score 0.593, cost 1.17 | gợi ý khác
+    A đã nối sang 26: gap 1, score 0.543, cost 0.66 | gợi ý khác
+
+SÓT 29->171: gap 12, dist 2.62, tỉ lệ cỡ 1.27, chạm mép False, cost 3.22
+    B đã được nối từ 166: gap 10, score 0.309, cost 1.67 | gợi ý khác
+
+SÓT 71->167: gap 3, dist 0.02, tỉ lệ cỡ 1.04, chạm mép False, cost 0.17
+    A đã nối sang 86: gap 5, score 0.504, cost 0.94 | gợi ý khác
+    B đã được nối từ 82: gap 3, score 0.406, cost 1.05 | gợi ý khác
+
+SÓT 87->165: gap 10, dist 0.24, tỉ lệ cỡ 0.99, chạm mép False, cost 0.74
+    A đã nối sang 90: gap 1, score 0.603, cost 0.56 | gợi ý khác
+
+##### DIAGNOSE_MERGE 02
+MOT17-02-FRCNN seed 0: fragment đã chèn 8, tìm lại được 7
+
+SÓT 59->96: gap 21, dist 0.01, tỉ lệ cỡ 0.98, chạm mép False, cost 1.06
+    A đã nối sang 56: gap 14, score 0.643, cost 1.14 | gợi ý khác
+    B đã được nối từ 68: gap 15, score 0.372, cost 1.74 | gợi ý khác
+
+##### DIAGNOSE_SWITCH 02
+MISS 14<->17 f289: disp 0.25/0.22, cross/straight 0.00, cỡ box 99/109
+MISS 23<->19 f405: disp 0.26/0.22, cross/straight 0.01, cỡ box 515/604
+MISS 49<->56 f572: disp 0.13/0.14, cross/straight 0.00, cỡ box 80/74
+MISS 38<->36 f372: disp 0.13/0.11, cross/straight 0.16, cỡ box 205/238
+{'total': 8, 'hit': 4, 'low_disp': 0, 'bad_cross': 0, 'other': 4}

@@ -63,11 +63,12 @@ for k in TYPES:
           f"{c['side']:>6}{c['fp']:>6}{ratio(c['tp'], c['tp'] + c['fp']):>11.2f}")
 
 print("\n== MERGE (fragment) ==")
-print(f"{'score>=':8}{'truth':>7}{'sugg':>6}{'tp':>5}{'base':>6}{'fp':>5}{'prec':>7}{'recall':>8}")
+print(f"{'score>=':8}{'truth':>7}{'sugg':>6}{'tp':>5}{'base':>6}{'fp':>5}{'prec':>7}{'strict':>8}{'recall':>8}")
 for t in THR:
     c = merge[t]
     print(f"{t:<8}{c['truth']:>7}{c['sugg']:>6}{c['tp']:>5}{c['base']:>6}{c['fp']:>5}"
-          f"{ratio(c['tp'], c['tp'] + c['fp']):>7.2f}{ratio(c['tp'], c['truth']):>8.2f}")
+          f"{ratio(c['tp'], c['tp'] + c['fp']):>7.2f}{ratio(c['tp'], c['sugg']):>8.2f}"
+          f"{ratio(c['tp'], c['truth']):>8.2f}")
 print("\nrecall theo độ dài gap (số frame giữa hai đoạn):")
 for t in THR:
     row = []
@@ -76,9 +77,3 @@ for t in THR:
         got = sum(lo <= g <= hi for g in gaps_found[t])
         row.append(f"{lo}-{hi if hi < 99 else '+'}: {got}/{tot}")
     print(f"  score>={t}: " + " | ".join(row))
-print(f"{'score>=':8}{'truth':>7}{'sugg':>6}{'tp':>5}{'base':>6}{'fp':>5}{'prec':>7}{'strict':>8}{'recall':>8}")
-for t in THR:
-    c = merge[t]
-    print(f"{t:<8}{c['truth']:>7}{c['sugg']:>6}{c['tp']:>5}{c['base']:>6}{c['fp']:>5}"
-          f"{ratio(c['tp'], c['tp'] + c['fp']):>7.2f}{ratio(c['tp'], c['sugg']):>8.2f}"
-          f"{ratio(c['tp'], c['truth']):>8.2f}")

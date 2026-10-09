@@ -29,6 +29,17 @@ def _match(e, t, tol):
     return False
 
 
+def _is_side(e, truths, near):
+    """Duplicate là cảnh báo toàn cục (xét toàn bộ track), frame proximity vô nghĩa."""
+    k = e["type"]
+    for t in truths:
+        if t["type"] == k or not (_ids(e) & _tids(t)):
+            continue
+        if k == "duplicate" or abs(e["frame"] - t["frame"]) <= near:
+            return True
+    return False
+
+
 def evaluate_rules(clean, dirty, truths, cfg, tol=3, near=5):
     """Mỗi cảnh báo trên dữ liệu có lỗi thuộc một nhóm:
     tp = khớp lỗi đã chèn cùng loại; base = đã có sẵn trên dữ liệu sạch;
@@ -47,8 +58,7 @@ def evaluate_rules(clean, dirty, truths, cfg, tol=3, near=5):
             found.update(hit)
         elif _key(e) in base:
             res[k]["base"] += 1
-        elif any(t["type"] != k and (_ids(e) & _tids(t)) and abs(e["frame"] - t["frame"]) <= near
-                 for t in truths):
+        elif _is_side(e, truths, near):
             res[k]["side"] += 1
         else:
             res[k]["fp"] += 1
