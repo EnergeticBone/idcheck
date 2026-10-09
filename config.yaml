@@ -1,0 +1,12 @@
+default:
+  min_missing_gap: 2     # thiếu ít nhất 2 frame mới tính là gap
+  max_missing_gap: 15    # thiếu nhiều hơn thì coi là track mất hẳn (việc của merge)
+  max_frame_step: 3      # hai box cách nhau quá 3 frame thì không xét jump
+  max_disp_ratio: 1.0    # dịch chuyển/kích thước box/frame
+  max_scale: 1.8         # tỉ lệ đổi kích thước giữa hai box liên tiếp
+  dup_iou: 0.7
+  dup_min_frames: 10
+  max_merge_gap: 30      # frame tối đa giữa 2 track để xét merge
+  max_merge_dist: 2.0    # khoảng cách dự đoán / kích thước box
+classes:
+  pedestrian: {}         # ghi đè ngưỡng riêng cho class tại đây
