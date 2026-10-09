@@ -23,13 +23,22 @@ def predict(tr, gap, k=5):
     vy = (cs[-1][1] - cs[0][1]) / (fs[-1] - fs[0])
     return (cs[-1][0] + vx * gap, cs[-1][1] + vy * gap)
 
+def _border_sides(b, size, m):
+    W, H = size
+    s = set()
+    if b.x1 <= m: s.add("L")
+    if b.x2 >= W - m: s.add("R")
+    if b.y1 <= m: s.add("T")
+    if b.y2 >= H - m: s.add("B")
+    return s
 
-def suggest_merges(tracks, cfg, min_score=0.0):
+def suggest_merges(tracks, cfg, min_score=0.0, frame_size=None):
     ids = list(tracks)
     n = len(ids)
     if n == 0:
         return []
     cost = np.full((n, n), BIG)
+    geo = np.full((n, n), BIG)
     for i, a in enumerate(ids):
         A = tracks[a]
         p = _p(cfg, A.label)
@@ -40,16 +49,22 @@ def suggest_merges(tracks, cfg, min_score=0.0):
             if a == b or A.label != B.label or not (1 <= gap <= p["max_merge_gap"]):
                 continue
             b_start = B.boxes[B.start]
-            ratio = size(b_start) / size(a_end)          # kích thước phải tương đương
+            ratio = size(b_start) / size(a_end)
             if not (1 / p["max_merge_scale"] < ratio < p["max_merge_scale"]):
                 continue
             px, py = predict(A, gap)
             bx, by = center(b_start)
             dist = hypot(px - bx, py - by) / size(a_end)
-            if dist < p["max_merge_dist"]:
-                cost[i, j] = dist + 0.05 * gap
+            if dist >= p["max_merge_dist"]:
+                continue
+            g = dist
+            m = p.get("border_margin", 0)
+            if frame_size is not None and m > 0:
+                if _border_sides(a_end, frame_size, m) & _border_sides(b_start, frame_size, m):
+                    g += p.get("border_penalty", 2.0)
+            geo[i, j] = g                  # dùng cho score
+            cost[i, j] = g + 0.05 * gap    # dùng cho ghép cặp
 
-    # Hàng/cột "không nối": một cặp chỉ được ghép khi cost < 2*reject
     d = _p(cfg, None)
     reject = 0.5 * (d["max_merge_dist"] + 0.05 * d["max_merge_gap"])
     M = np.full((2 * n, 2 * n), BIG)
@@ -63,7 +78,8 @@ def suggest_merges(tracks, cfg, min_score=0.0):
     out = []
     for r, c in zip(rows, cols):
         if r < n and c < n and cost[r, c] < BIG:
-            s = round(exp(-cost[r, c]), 3)
+            s = round(exp(-geo[r, c]), 3)
             if s >= min_score:
-                out.append(dict(a=ids[r], b=ids[c], score=s))
-    return sorted(out, key=lambda x: x["score"], reverse=True)
+                out.append(dict(a=ids[r], b=ids[c], score=s,
+                                gap=tracks[ids[c]].start - tracks[ids[r]].end))
+    return sorted(out, key=lambda x: (-x["score"], x["gap"]))

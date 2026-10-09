@@ -114,9 +114,8 @@ def _nearest_peer(tracks, tid, t, used):
     return best
 
 
-def inject_many(clean, n_per_type=10, seed=0, min_len=30, margin=10):
-    """Chèn lỗi xen kẽ giữa các loại để không loại nào bị bỏ đói.
-    Mỗi track chỉ bị chèn tối đa một lỗi."""
+def inject_many(clean, n_per_type=10, seed=0, min_len=30, margin=10,
+                drop_range=(2, 6), gap_range=(2, 6), jump_range=(2.0, 4.0)):
     rng = random.Random(seed)
     tracks = copy.deepcopy(clean)
     pool = [t for t, tr in tracks.items() if len(tr.boxes) >= min_len]
@@ -130,19 +129,19 @@ def inject_many(clean, n_per_type=10, seed=0, min_len=30, margin=10):
         if hi <= lo:
             return None
         target = rng.randint(lo, hi)
-        at = min(fs, key=lambda f: abs(f - target))      # frame có thật
+        at = min(fs, key=lambda f: abs(f - target))
         if kind == "fragment":
-            return split_track(tracks, tid, at, drop=rng.randint(2, 6))
+            return split_track(tracks, tid, at, drop=rng.randint(*drop_range))
         if kind == "gap":
-            return delete_frames(tracks, tid, at, k=rng.randint(2, 6))
+            return delete_frames(tracks, tid, at, k=rng.randint(*gap_range))
         if kind == "jump":
-            return jump_box(tracks, tid, at, ratio=rng.uniform(2.0, 4.0))
+            return jump_box(tracks, tid, at, ratio=rng.uniform(*jump_range))
         if kind == "switch":
             peer = _nearest_peer(tracks, tid, at, used)
             return swap_ids(tracks, tid, peer, at) if peer is not None else None
         if kind == "class_flip":
             return flip_class(tracks, tid, at, rng.randint(3, 8), "car")
-        return duplicate_track(tracks, tid, shift=rng.uniform(1, 5))
+        return duplicate_track(tracks, tid, shift=rng.uniform(1, 3))
 
     for _ in range(n_per_type):
         for kind in kinds:

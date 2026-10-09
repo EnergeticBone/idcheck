@@ -7,7 +7,7 @@ default:
   dup_iou: 0.7
   dup_min_frames: 10
   dup_min_ratio: 0.6
-  skip_occluded_gap: true 
+  skip_occluded_gap: false
   max_merge_gap: 30      # frame tối đa giữa 2 track để xét merge
   max_merge_dist: 2.0    # khoảng cách dự đoán / kích thước box
   max_merge_scale: 2.0   # tỉ lệ kích thước tối đa giữa box cuối của A và box đầu của B

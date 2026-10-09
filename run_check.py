@@ -1,13 +1,16 @@
 import sys, glob, yaml
 from collections import Counter
-from adapters.mot import load_mot_gt
+from adapters.mot import load_mot_gt, load_fps
+from core.config import scale_cfg
 from core.inject import inject_many
 from core.rules import run_rules
 from core.merge import suggest_merges
 
 seq, n = sys.argv[1], int(sys.argv[2])
 gt = glob.glob(f"data/clean/**/{seq}/gt/gt.txt", recursive=True)[0]
-cfg = yaml.safe_load(open("config.yaml"))
+cfg = yaml.safe_load(open(sys.argv[3] if len(sys.argv) > 3 else "config.yaml"))
+fps = load_fps(gt)
+cfg = scale_cfg(cfg, fps)
 
 clean = load_mot_gt(gt)
 dirty, truths = inject_many(clean, n_per_type=n, seed=42)

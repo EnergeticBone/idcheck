@@ -1,5 +1,6 @@
 import numpy as np
 from core.schema import Box, Track
+import configparser, os
 
 # MOT17: class 1 = pedestrian. Các class khác (2 người trên xe, 7 người đứng yên,
 # 8 distractor, 12 phản chiếu) tạm bỏ qua cho bản đầu.
@@ -27,3 +28,17 @@ def load_mot_gt(path, classes=(1,), occluded_below=0.5):
             occluded=bool(vis < occluded_below),
         )
     return tracks
+
+def load_seqinfo(gt_path):
+    """Trả về (rộng, cao) của ảnh, đọc từ seqinfo.ini cạnh thư mục gt/."""
+    ini = os.path.join(os.path.dirname(os.path.dirname(gt_path)), "seqinfo.ini")
+    cp = configparser.ConfigParser()
+    cp.read(ini)
+    s = cp["Sequence"]
+    return int(s["imWidth"]), int(s["imHeight"])
+
+def load_fps(gt_path):
+    ini = os.path.join(os.path.dirname(os.path.dirname(gt_path)), "seqinfo.ini")
+    cp = configparser.ConfigParser()
+    cp.read(ini)
+    return float(cp["Sequence"]["frameRate"])
