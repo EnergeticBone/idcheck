@@ -1,5 +1,5 @@
 from core.schema import Box, Track
-from core.rules import check_gaps, check_jumps, check_class_flips, check_duplicates, check_switches
+from core.rules import check_gaps, check_jumps, check_class_flips, check_duplicates, check_switches, build_center_index
 from core.inject import swap_ids
 
 CFG = {"default": dict(min_missing_gap=2, max_missing_gap=15, max_frame_step=3,
@@ -97,3 +97,33 @@ def test_slow_but_separated_swap_detected():
     tr = {1: mk(1, range(0, 40), x0=0.0), 2: mk(2, range(0, 40), x0=15.0)}
     swap_ids(tr, 1, 2, t=20)
     assert len(check_switches(tr, CFG)) == 1
+
+
+def mk_group(dy=30.0, f_shift=20, n_tracks=6, n=40):
+    tracks = {}
+    for i in range(n_tracks):
+        boxes = {}
+        for f in range(n):
+            y = i * 5 + (dy if f >= f_shift else 0.0)
+            boxes[f] = Box(f, 10 * i + f, y, 10 * i + f + 10, y + 20, "pedestrian")
+        tracks[i + 1] = Track(i + 1, "pedestrian", boxes)
+    return tracks
+
+
+CAM = {"default": dict(CFG["default"], compensate_camera=True, cam_min_tracks=4)}
+
+
+def test_camera_shake_is_suppressed():
+    tracks = mk_group(dy=30.0)
+    assert sum(len(check_jumps(t, CFG)) for t in tracks.values()) == 6
+    idx = build_center_index(tracks)
+    assert sum(len(check_jumps(t, CAM, idx)) for t in tracks.values()) == 0
+
+
+def test_single_jump_survives_compensation():
+    tracks = mk_group(dy=0.0)
+    b = tracks[1].boxes[20]
+    b.x1 += 60
+    b.x2 += 60
+    idx = build_center_index(tracks)
+    assert len(check_jumps(tracks[1], CAM, idx)) >= 1

@@ -1,0 +1,22 @@
+
+== LUẬT | tập report: MOT17-04-FRCNN, MOT17-10-FRCNN, MOT17-13-FRCNN ==
+cảnh báo trên dữ liệu SẠCH: 5 / 2454 frame = 0.20 mỗi 100 frame  {'jump': 4, 'duplicate': 1}
+loại         truth  recall    tp  base  side    fp  precision
+gap             84    1.00    84     0     0     0       1.00
+jump            84    1.00    84    10    67     3       0.97
+class_flip      82    1.00    82     0     0     0       1.00
+duplicate       81    1.00    81     3     1     0       1.00
+switch          84    0.94    79     0     0     2       0.98
+
+== MERGE (fragment) ==
+score>=   truth  sugg   tp  base   fp   prec  strict  recall
+0.0          84   161   54    56   51   0.51    0.34    0.64
+0.3          84   152   54    53   45   0.55    0.36    0.64
+0.5          84   135   54    44   37   0.59    0.40    0.64
+0.7          84   105   50    31   24   0.68    0.48    0.60
+
+recall theo độ dài gap (số frame giữa hai đoạn):
+  score>=0.0: 2-5: 11/12 | 6-12: 18/23 | 13-+: 25/49
+  score>=0.3: 2-5: 11/12 | 6-12: 18/23 | 13-+: 25/49
+  score>=0.5: 2-5: 11/12 | 6-12: 18/23 | 13-+: 25/49
+  score>=0.7: 2-5: 11/12 | 6-12: 17/23 | 13-+: 22/49

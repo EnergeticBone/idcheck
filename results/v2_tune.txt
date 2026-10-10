@@ -1,0 +1,22 @@
+
+== LUẬT | tập tune: MOT17-02-FRCNN, MOT17-05-FRCNN, MOT17-09-FRCNN, MOT17-11-FRCNN ==
+cảnh báo trên dữ liệu SẠCH: 0 / 2862 frame = 0.00 mỗi 100 frame  {}
+loại         truth  recall    tp  base  side    fp  precision
+gap             93    1.00    93     0     0     0       1.00
+jump            93    1.00    93     0    84     0       1.00
+class_flip      90    1.00    90     0     0     0       1.00
+duplicate       88    1.00    88     0     4     0       1.00
+switch          90    0.89    80     0     0     0       1.00
+
+== MERGE (fragment) ==
+score>=   truth  sugg   tp  base   fp   prec  strict  recall
+0.0          94   240   77   105   58   0.57    0.32    0.82
+0.3          94   234   77   100   57   0.57    0.33    0.82
+0.5          94   197   77    80   40   0.66    0.39    0.82
+0.7          94   126   75    40   11   0.87    0.60    0.80
+
+recall theo độ dài gap (số frame giữa hai đoạn):
+  score>=0.0: 2-5: 11/13 | 6-12: 27/33 | 13-+: 39/48
+  score>=0.3: 2-5: 11/13 | 6-12: 27/33 | 13-+: 39/48
+  score>=0.5: 2-5: 11/13 | 6-12: 27/33 | 13-+: 39/48
+  score>=0.7: 2-5: 11/13 | 6-12: 25/33 | 13-+: 39/48

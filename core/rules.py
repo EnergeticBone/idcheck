@@ -1,5 +1,6 @@
 from collections import Counter
 from math import hypot
+from statistics import median
 
 
 def center(b):
@@ -44,7 +45,26 @@ def check_gaps(tr, cfg):
     return errs
 
 
-def check_jumps(tr, cfg):
+def build_center_index(tracks):
+    """frame -> {track_id: tâm box}, dùng để ước lượng chuyển động chung của cảnh."""
+    idx = {}
+    for tr in tracks.values():
+        for f, b in tr.boxes.items():
+            if not b.outside:
+                idx.setdefault(f, {})[tr.id] = center(b)
+    return idx
+
+
+def _others_shift(index, exclude_id, a, b, min_tracks):
+    ca, cb = index.get(a, {}), index.get(b, {})
+    common = [t for t in ca.keys() & cb.keys() if t != exclude_id]
+    if len(common) < min_tracks:
+        return None
+    return (median(cb[t][0] - ca[t][0] for t in common),
+            median(cb[t][1] - ca[t][1] for t in common))
+
+
+def check_jumps(tr, cfg, index=None):
     p, errs, last = params(cfg, tr.label), [], -10**9
     fs = sorted(f for f, b in tr.boxes.items() if not b.outside)
     for a, b in zip(fs, fs[1:]):
@@ -56,6 +76,13 @@ def check_jumps(tr, cfg):
         ratio = size(B) / size(A)
         bad_scale = not (1 / p["max_scale"] < ratio < p["max_scale"])
         if disp > p["max_disp_ratio"] or bad_scale:
+            if (p.get("compensate_camera", False) and index is not None
+                    and not bad_scale):
+                g = _others_shift(index, tr.id, a, b, p.get("cam_min_tracks", 4))
+                if g is not None:
+                    comp = hypot(xb - xa - g[0], yb - ya - g[1]) / size(A) / (b - a)
+                    if comp <= p["max_disp_ratio"]:
+                        continue          # cả cảnh dịch cùng nhau: camera, không phải lỗi nhãn
             if b - last <= 2:          # box nhảy đi rồi nhảy về: chỉ báo một lần
                 continue
             last = b
@@ -109,9 +136,10 @@ def check_duplicates(tracks, cfg):
 
 def run_rules(tracks, cfg):
     errs = []
+    index = build_center_index(tracks)
     for tr in tracks.values():
         errs += check_gaps(tr, cfg)
-        errs += check_jumps(tr, cfg)
+        errs += check_jumps(tr, cfg, index)
         errs += check_class_flips(tr, cfg)
     errs += check_duplicates(tracks, cfg)
     errs += check_switches(tracks, cfg)

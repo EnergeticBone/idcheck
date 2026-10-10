@@ -17,6 +17,8 @@ default:
   swap_min_sep: 0.3
   swap_max_sep: 3.0
   swap_cross_ratio: 0.5
+  compensate_camera: true
+  cam_min_tracks: 4
 classes:
   pedestrian:
     max_disp_ratio: 0.6         # ghi đè ngưỡng riêng cho class tại đây
