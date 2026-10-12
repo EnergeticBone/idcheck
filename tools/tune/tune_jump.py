@@ -1,3 +1,8 @@
+import sys, pathlib
+_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import sys, glob, yaml, copy
 from adapters.mot import load_mot_gt, load_fps
 from core.config import scale_cfg

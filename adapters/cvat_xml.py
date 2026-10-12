@@ -154,3 +154,88 @@ def load_cvat_xml(source, interpolate=True):
         tracks[tid] = track
 
     return tracks
+
+
+def dump_cvat_xml(tracks, output_path, meta=None, zero_indexed=False):
+    """Xuất dict[int, Track] ra định dạng CVAT for video 1.1 XML.
+
+    Tham số:
+        tracks: dict[int, Track]
+        output_path: đường dẫn file .xml cần lưu
+        meta: dict chứa 'name', 'size', 'width', 'height'
+        zero_indexed: nếu True, dịch frame về 0-indexed (frame - 1 nếu min >= 1)
+                      phù hợp khi import video trong CVAT đếm từ frame 0.
+    """
+    meta = meta or {}
+    root = ET.Element("annotations")
+    ET.SubElement(root, "version").text = "1.1"
+
+    meta_el = ET.SubElement(root, "meta")
+    task_el = ET.SubElement(meta_el, "task")
+    if "name" in meta:
+        ET.SubElement(task_el, "name").text = str(meta["name"])
+    if "size" in meta:
+        ET.SubElement(task_el, "size").text = str(meta["size"])
+    if "width" in meta and "height" in meta:
+        orig = ET.SubElement(task_el, "original_size")
+        ET.SubElement(orig, "width").text = str(meta["width"])
+        ET.SubElement(orig, "height").text = str(meta["height"])
+
+    labels_el = ET.SubElement(task_el, "labels")
+    unique_labels = sorted({tr.label for tr in tracks.values()} | {"pedestrian"})
+    for l_name in unique_labels:
+        lbl_el = ET.SubElement(labels_el, "label")
+        ET.SubElement(lbl_el, "name").text = l_name
+        ET.SubElement(lbl_el, "type").text = "any"
+
+    all_frames = [f for tr in tracks.values() for f in tr.boxes]
+    offset = 1 if (zero_indexed and all_frames and min(all_frames) >= 1) else 0
+
+    total_size = meta.get("size")
+    if not total_size and all_frames:
+        total_size = max(all_frames) - offset + 1
+
+    for tid in sorted(tracks):
+        tr = tracks[tid]
+        tr_el = ET.SubElement(root, "track", id=str(tid), label=tr.label)
+        sorted_frames = sorted(tr.boxes)
+        for f in sorted_frames:
+            b = tr.boxes[f]
+            box_frame = f - offset
+            ET.SubElement(
+                tr_el,
+                "box",
+                frame=str(box_frame),
+                xtl=f"{b.x1:.2f}",
+                ytl=f"{b.y1:.2f}",
+                xbr=f"{b.x2:.2f}",
+                ybr=f"{b.y2:.2f}",
+                outside="1" if b.outside else "0",
+                occluded="1" if b.occluded else "0",
+                keyframe="1" if b.keyframe else "0",
+            )
+
+        # Đóng track bằng outside="1" để CVAT biết đối tượng đã rời khung hình,
+        # tránh việc CVAT giữ box đứng yên ở mép màn hình đến hết video.
+        if sorted_frames:
+            last_f = sorted_frames[-1]
+            last_b = tr.boxes[last_f]
+            last_box_frame = last_f - offset
+            if not last_b.outside and (total_size is None or last_box_frame + 1 < total_size):
+                ET.SubElement(
+                    tr_el,
+                    "box",
+                    frame=str(last_box_frame + 1),
+                    xtl=f"{last_b.x1:.2f}",
+                    ytl=f"{last_b.y1:.2f}",
+                    xbr=f"{last_b.x2:.2f}",
+                    ybr=f"{last_b.y2:.2f}",
+                    outside="1",
+                    occluded="0",
+                    keyframe="1",
+                )
+
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="  ")
+    tree.write(output_path, encoding="utf-8", xml_declaration=True)
+

@@ -1,0 +1,22 @@
+
+== LUẬT | tập mot20_small: MOT20-01, MOT20-02 ==
+cảnh báo trên dữ liệu SẠCH: 0 / 3211 frame = 0.00 mỗi 100 frame  {}
+loại         truth  recall    tp  base  side    fp  precision
+gap             60    1.00    60     0     0     0       1.00
+jump            60    1.00    60     0    32     0       1.00
+class_flip      60    1.00    60     0     0     0       1.00
+duplicate       60    1.00    60     0     0     0       1.00
+switch          60    0.97    58     0     1     0       1.00
+
+== MERGE (fragment) ==
+score>=   truth  sugg   tp  base   fp   prec  strict  recall
+0.0          60   131   55    58   18   0.75    0.42    0.92
+0.3          60   125   55    52   18   0.75    0.44    0.92
+0.5          60   110   55    40   15   0.79    0.50    0.92
+0.7          60    77   55    15    7   0.89    0.71    0.92
+
+recall theo độ dài gap (số frame giữa hai đoạn):
+  score>=0.0: 2-5: 13/13 | 6-12: 18/19 | 13-+: 24/28
+  score>=0.3: 2-5: 13/13 | 6-12: 18/19 | 13-+: 24/28
+  score>=0.5: 2-5: 13/13 | 6-12: 18/19 | 13-+: 24/28
+  score>=0.7: 2-5: 13/13 | 6-12: 18/19 | 13-+: 24/28

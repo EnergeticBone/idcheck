@@ -19,8 +19,13 @@ def get_client(host=None, user=None, password=None):
     return make_client(host=host, credentials=(user, password))
 
 
-def load_job_tracks(client, job_id, interpolate=True):
-    """Lấy annotations của job qua API -> (dict[int, Track], meta_info)."""
+def load_job_tracks(client, job_id, interpolate=True, use_client_id=True):
+    """Lấy annotations của job qua API -> (dict[int, Track], meta_info).
+
+    use_client_id: Nếu True (mặc định), gán Track ID là Client ID hiển thị trên
+                   giao diện CVAT (1, 2, ... N) để mã Track trong Issue trùng khớp
+                   100% với số hiển thị trên màn hình CVAT.
+    """
     job = client.jobs.retrieve(job_id)
     labels = {lbl.id: lbl.name for lbl in job.get_labels()}
 
@@ -29,13 +34,19 @@ def load_job_tracks(client, job_id, interpolate=True):
         "task_id": getattr(job, "task_id", None),
         "stage": getattr(job, "stage", None),
         "state": getattr(job, "state", None),
+        "server_to_client_id": {},
+        "client_to_server_id": {},
     }
 
     annotations = job.get_annotations()
     tracks = {}
 
-    for lt in getattr(annotations, "tracks", []):
-        tid = lt.id
+    for idx, lt in enumerate(getattr(annotations, "tracks", [])):
+        client_id = idx + 1
+        tid = client_id if use_client_id else lt.id
+        meta["server_to_client_id"][lt.id] = client_id
+        meta["client_to_server_id"][client_id] = lt.id
+
         label_id = lt.label_id
         label_name = labels.get(label_id, str(label_id))
         track = Track(id=tid, label=label_name)

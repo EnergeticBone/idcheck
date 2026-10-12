@@ -46,10 +46,11 @@ def test_load_job_tracks():
 
     tracks, meta = load_job_tracks(mock_client, job_id=12, interpolate=True)
 
-    assert 101 in tracks
-    tr = tracks[101]
+    assert 1 in tracks
+    tr = tracks[1]
     assert tr.label == "pedestrian"
-    assert tr.id == 101
+    assert tr.id == 1
+    assert meta["client_to_server_id"][1] == 101
 
     # Keyframes and interpolated frames
     assert 0 in tr.boxes

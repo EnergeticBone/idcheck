@@ -112,3 +112,21 @@ def test_load_cvat_xml_meta():
     assert meta2["width"] == 1280
     assert meta2["height"] == 720
     assert meta2["size"] == 100
+
+
+def test_dump_cvat_xml(tmp_path):
+    from adapters.cvat_xml import dump_cvat_xml
+
+    tr = Track(id=1, label="pedestrian")
+    tr.boxes[0] = Box(0, 10.0, 20.0, 30.0, 40.0, "pedestrian")
+    tr.boxes[1] = Box(1, 15.0, 20.0, 35.0, 40.0, "pedestrian", occluded=True)
+
+    out_file = str(tmp_path / "test_dump.xml")
+    dump_cvat_xml({1: tr}, out_file, meta={"name": "demo", "size": 2, "width": 1920, "height": 1080})
+
+    # Read back and verify
+    reloaded = load_cvat_xml(out_file)
+    assert 1 in reloaded
+    assert len(reloaded[1].boxes) == 2
+    assert reloaded[1].boxes[1].occluded
+

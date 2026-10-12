@@ -1,3 +1,8 @@
+import sys, pathlib
+_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import sys, glob
 import numpy as np
 from adapters.mot import load_mot_gt
