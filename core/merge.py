@@ -85,7 +85,7 @@ def suggest_merges(tracks, cfg, min_score=0.0, frame_size=None):
                 cos = (vA[0] * vB[0] + vA[1] * vB[1]) / (sa * sb)
                 g += p.get("merge_dir_weight", 0.5) * (1 - cos) / 2
             geo[i, j] = g                  # dùng cho score
-            cost[i, j] = g + 0.05 * gap    # dùng cho ghép cặp
+            cost[i, j] = g + p.get("merge_gap_cost", 0.05) * gap    # dùng cho ghép cặp
 
     reject = 0.5 * _p(cfg, None)["merge_max_cost"]
     M = np.full((2 * n, 2 * n), BIG)

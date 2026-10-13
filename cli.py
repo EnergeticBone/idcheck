@@ -6,6 +6,7 @@ import sys
 import threading
 import yaml
 
+from core.config import resolve_cfg
 from core.rules import run_rules
 from core.merge import suggest_merges
 from adapters.cvat_xml import load_cvat_xml, load_cvat_xml_meta
@@ -21,12 +22,13 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(m
 logger = logging.getLogger("idcheck")
 
 
-def load_config(config_path):
+def load_config(config_path, fps=None):
     if not os.path.isfile(config_path):
         logger.warning("Không tìm thấy file cấu hình %s, sử dụng mặc định rỗng.", config_path)
         return {}
     with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        cfg = yaml.safe_load(f) or {}
+    return resolve_cfg(cfg, fps) if fps else cfg
 
 
 def print_report(alerts, merges=None, issue_results=None):
@@ -81,7 +83,7 @@ def print_report(alerts, merges=None, issue_results=None):
 
 
 def cmd_check_xml(args):
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, args.fps)
     meta = load_cvat_xml_meta(args.xml_file)
     tracks = load_cvat_xml(args.xml_file, interpolate=not args.no_interpolate)
 
@@ -106,7 +108,7 @@ def cmd_check_xml(args):
 
 
 def cmd_check_job(args):
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, args.fps)
     client = get_client(host=args.host, user=args.user, password=args.password)
 
     res = check_job(
@@ -132,7 +134,7 @@ def run_webhook_server(args):
     from flask import Flask, request, jsonify
 
     app = Flask(__name__)
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, args.fps)
 
     @app.route("/health", methods=["GET"])
     def health():
@@ -197,7 +199,7 @@ def run_webhook_server(args):
 def cmd_watch(args):
     import time
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, args.fps)
     client = get_client(host=args.host, user=args.user, password=args.password)
 
     logger.info("Bắt đầu giám sát CVAT (chu kỳ quét: %ds)... Nhấn Ctrl+C để dừng.", args.interval)
@@ -301,6 +303,9 @@ def build_parser():
     p_srv.add_argument("--force-check", action="store_true", help="Chạy kiểm tra trên mọi sự kiện không phân biệt stage")
     p_srv.set_defaults(func=run_webhook_server)
 
+    for sp in (p_xml, p_job, p_watch, p_srv):
+        sp.add_argument("--fps", type=float, default=None,
+                        help="fps của nhãn (ví dụ 5 cho BDD100K MOT, 25 cho MOT20)")
     return parser
 
 

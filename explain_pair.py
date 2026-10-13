@@ -5,7 +5,7 @@
 """
 import os, sys, argparse, yaml
 from math import hypot, exp
-from core.config import scale_cfg
+from core.config import resolve_cfg
 from core.rules import center, size
 from core.merge import predict, suggest_merges, _p, _border_sides
 
@@ -66,7 +66,7 @@ def explain(tracks, a, b, cfg, fsz=None, min_score=0.5, out=print):
                 out(f"  [phạt] A kết thúc và B bắt đầu cùng chạm mép {sorted(both)}: cộng {P['border_penalty']}")
         elif P["border_margin"] > 0:
             out("  [bỏ qua] không có kích thước ảnh nên không xét phạt mép khung")
-        cost = geo + 0.05 * gap
+        cost = geo + P.get("merge_gap_cost", 0.05) * gap
         score = exp(-geo)
         out(f"  cost = {cost:.2f}; score = exp(-{geo:.2f}) = {score:.3f}")
         ok = score >= min_score
@@ -118,6 +118,5 @@ if __name__ == "__main__":
         from adapters.bdd import load_bdd_video
         tracks = load_bdd_video(args.path)
     cfg = yaml.safe_load(open(args.config))
-    if not args.no_scale:
-        cfg = scale_cfg(cfg, args.fps)
+    cfg = resolve_cfg(cfg, args.fps)
     explain(tracks, args.a, args.b, cfg, fsz, args.min_score)
