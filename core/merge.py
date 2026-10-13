@@ -32,6 +32,22 @@ def _border_sides(b, size, m):
     if b.y2 >= H - m: s.add("B")
     return s
 
+def _vel(tr, k=5, tail=True):
+    fs = sorted(f for f, b in tr.boxes.items() if not b.outside)
+    fs = fs[-k:] if tail else fs[:k]
+    if len(fs) < 2:
+        return 0.0, 0.0
+    (x0, y0), (x1, y1) = center(tr.boxes[fs[0]]), center(tr.boxes[fs[-1]])
+    return (x1 - x0) / (fs[-1] - fs[0]), (y1 - y0) / (fs[-1] - fs[0])
+
+
+def _moving_through(box, v, fsz, m, outward, eps=0.3):
+    vx, vy = v
+    s_out = {"L": vx < -eps, "R": vx > eps, "T": vy < -eps, "B": vy > eps}
+    s_in = {"L": vx > eps, "R": vx < -eps, "T": vy > eps, "B": vy < -eps}
+    table = s_out if outward else s_in
+    return {s for s in _border_sides(box, fsz, m) if table[s]}
+
 def suggest_merges(tracks, cfg, min_score=0.0, frame_size=None):
     ids = list(tracks)
     n = len(ids)
@@ -59,9 +75,15 @@ def suggest_merges(tracks, cfg, min_score=0.0, frame_size=None):
                 continue
             g = dist
             m = p.get("border_margin", 0)
+            vA, vB = _vel(A, tail=True), _vel(B, tail=False)
             if frame_size is not None and m > 0:
-                if _border_sides(a_end, frame_size, m) & _border_sides(b_start, frame_size, m):
-                    g += p.get("border_penalty", 2.0)
+                if _moving_through(a_end, vA, frame_size, m, True) & \
+                   _moving_through(b_start, vB, frame_size, m, False):
+                    g += p.get("border_penalty", 2.0)      # A đi ra, B đi vào cùng mép
+            sa, sb = hypot(*vA), hypot(*vB)
+            if sa > 0.3 and sb > 0.3:
+                cos = (vA[0] * vB[0] + vA[1] * vB[1]) / (sa * sb)
+                g += p.get("merge_dir_weight", 0.5) * (1 - cos) / 2
             geo[i, j] = g                  # dùng cho score
             cost[i, j] = g + 0.05 * gap    # dùng cho ghép cặp
 

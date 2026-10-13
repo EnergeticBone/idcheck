@@ -265,7 +265,8 @@ def build_parser():
     p_job.add_argument("--password", default=None, help="Mật khẩu CVAT (mặc định lấy từ CVAT_PASS)")
     p_job.add_argument("--create-issues", action="store_true", help="Tự động tạo Issue trên CVAT tại các frame phát hiện lỗi")
     p_job.add_argument("--dry-run", action="store_true", help="Mô phỏng quá trình tạo Issue (không ghi lên server)")
-    p_job.add_argument("--include-merges", action="store_true", help="Tạo cả Issue cho các gợi ý nối track (merge)")
+    p_job.add_argument("--include-merges", action=argparse.BooleanOptionalAction, default=True,
+                   help="Tạo cả Issue cho các gợi ý nối track (mặc định bật, tắt bằng --no-include-merges)")
     p_job.add_argument("--min-score", type=float, default=0.5, help="Ngưỡng score tối thiểu cho merge suggestion")
     p_job.add_argument("--json", action="store_true", help="Xuất kết quả định dạng JSON")
     p_job.set_defaults(func=cmd_check_job)
@@ -278,7 +279,8 @@ def build_parser():
     p_watch.add_argument("--password", default=None, help="Mật khẩu CVAT")
     p_watch.add_argument("--interval", type=int, default=10, help="Thời gian lặp quét (giây, mặc định 10s)")
     p_watch.add_argument("--dry-run", action="store_true", help="Mô phỏng, không ghi issue lên CVAT")
-    p_watch.add_argument("--include-merges", action="store_true", help="Tạo cả Issue cho các gợi ý nối track")
+    p_watch.add_argument("--include-merges", action=argparse.BooleanOptionalAction, default=True,
+                     help="Tạo cả Issue cho các gợi ý nối track (mặc định bật, tắt bằng --no-include-merges)")
     p_watch.add_argument("--min-score", type=float, default=0.5, help="Ngưỡng score tối thiểu cho merge suggestion")
     p_watch.add_argument("--once", action="store_true", help="Chỉ quét 1 lần rồi thoát")
     p_watch.set_defaults(func=cmd_watch)
@@ -293,7 +295,8 @@ def build_parser():
     p_srv.add_argument("--cvat-password", default=None, help="Mật khẩu CVAT")
     p_srv.add_argument("--auto-create-issues", action="store_true", default=True, help="Tự động tạo issues khi job sang validation")
     p_srv.add_argument("--dry-run", action="store_true", help="Chế độ mô phỏng, không ghi issue lên CVAT")
-    p_srv.add_argument("--include-merges", action="store_true", help="Tạo cả Issue cho các gợi ý nối track")
+    p_srv.add_argument("--include-merges", action=argparse.BooleanOptionalAction, default=True,
+                   help="Tạo cả Issue cho các gợi ý nối track (mặc định bật, tắt bằng --no-include-merges)")
     p_srv.add_argument("--min-score", type=float, default=0.5, help="Ngưỡng score tối thiểu cho merge suggestion")
     p_srv.add_argument("--force-check", action="store_true", help="Chạy kiểm tra trên mọi sự kiện không phân biệt stage")
     p_srv.set_defaults(func=run_webhook_server)

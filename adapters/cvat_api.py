@@ -211,7 +211,7 @@ def post_merges_as_issues(client, job_id, merges, tracks=None, dry_run=False, sk
     )
 
 
-def check_job(client, job_id, cfg, create_issues=False, dry_run=False, include_merges=False, min_score=0.5):
+def check_job(client, job_id, cfg, create_issues=False, dry_run=False, include_merges=True, min_score=0.5):
     """Kiểm tra toàn diện một job CVAT: tải tracks, chạy rules, tìm merge và tùy chọn tạo issue."""
     tracks, meta = load_job_tracks(client, job_id, interpolate=True)
     alerts = run_rules(tracks, cfg)

@@ -1,0 +1,306 @@
+{
+  "job_id": 5,
+  "meta": {
+    "job_id": "5",
+    "task_id": "5",
+    "stage": "validation",
+    "state": "in progress",
+    "server_to_client_id": "{109: 1, 110: 2, 114: 3, 115: 4, 117: 5, 119: 6, 121: 7, 122: 8, 123: 9, 125: 10, 126: 11, 127: 12, 128: 13, 129: 14, 130: 15, 131: 16, 132: 17, 133: 18, 134: 19, 135: 20, 136: 21, 137: 22, 138: 23, 139: 24, 140: 25, 141: 26, 142: 27, 143: 28, 144: 29, 145: 30, 147: 31, 148: 32, 149: 33, 150: 34, 151: 35, 152: 36, 153: 37, 154: 38, 155: 39, 156: 40, 157: 41, 158: 42, 159: 43, 161: 44, 162: 45, 163: 46, 165: 47, 167: 48, 169: 49, 170: 50, 173: 51, 174: 52, 175: 53, 176: 54, 177: 55, 178: 56, 179: 57, 180: 58, 181: 59, 183: 60, 185: 61, 187: 62, 189: 63, 191: 64, 193: 65, 195: 66, 197: 67, 199: 68, 201: 69, 202: 70, 203: 71, 204: 72, 205: 73, 206: 74, 207: 75, 208: 76, 209: 77, 210: 78, 211: 79, 212: 80, 213: 81, 214: 82, 215: 83, 216: 84}",
+    "client_to_server_id": "{1: 109, 2: 110, 3: 114, 4: 115, 5: 117, 6: 119, 7: 121, 8: 122, 9: 123, 10: 125, 11: 126, 12: 127, 13: 128, 14: 129, 15: 130, 16: 131, 17: 132, 18: 133, 19: 134, 20: 135, 21: 136, 22: 137, 23: 138, 24: 139, 25: 140, 26: 141, 27: 142, 28: 143, 29: 144, 30: 145, 31: 147, 32: 148, 33: 149, 34: 150, 35: 151, 36: 152, 37: 153, 38: 154, 39: 155, 40: 156, 41: 157, 42: 158, 43: 159, 44: 161, 45: 162, 46: 163, 47: 165, 48: 167, 49: 169, 50: 170, 51: 173, 52: 174, 53: 175, 54: 176, 55: 177, 56: 178, 57: 179, 58: 180, 59: 181, 60: 183, 61: 185, 62: 187, 63: 189, 64: 191, 65: 193, 66: 195, 67: 197, 68: 199, 69: 201, 70: 202, 71: 203, 72: 204, 73: 205, 74: 206, 75: 207, 76: 208, 77: 209, 78: 210, 79: 211, 80: 212, 81: 213, 82: 214, 83: 215, 84: 216}"
+  },
+  "num_tracks": 84,
+  "alerts": [
+    {
+      "type": "jump",
+      "track_id": 4,
+      "frame": 399,
+      "detail": "dịch 1.45 lần kích thước/frame, đổi cỡ x1.00"
+    },
+    {
+      "type": "switch",
+      "track_id": 26,
+      "other_id": 27,
+      "frame": 408,
+      "detail": "nghi hoán ID giữa track 26 và 27"
+    },
+    {
+      "type": "switch",
+      "track_id": 37,
+      "other_id": 38,
+      "frame": 398,
+      "detail": "nghi hoán ID giữa track 37 và 38"
+    },
+    {
+      "type": "jump",
+      "track_id": 56,
+      "frame": 400,
+      "detail": "dịch 3.77 lần kích thước/frame, đổi cỡ x1.00"
+    }
+  ],
+  "merges": [
+    {
+      "a": 34,
+      "b": 61,
+      "score": 0.994,
+      "gap": 4
+    },
+    {
+      "a": 58,
+      "b": 68,
+      "score": 0.993,
+      "gap": 10
+    },
+    {
+      "a": 36,
+      "b": 67,
+      "score": 0.972,
+      "gap": 14
+    },
+    {
+      "a": 13,
+      "b": 65,
+      "score": 0.97,
+      "gap": 6
+    },
+    {
+      "a": 40,
+      "b": 59,
+      "score": 0.966,
+      "gap": 14
+    },
+    {
+      "a": 50,
+      "b": 64,
+      "score": 0.901,
+      "gap": 16
+    },
+    {
+      "a": 55,
+      "b": 62,
+      "score": 0.861,
+      "gap": 18
+    },
+    {
+      "a": 52,
+      "b": 53,
+      "score": 0.805,
+      "gap": 2
+    },
+    {
+      "a": 8,
+      "b": 60,
+      "score": 0.797,
+      "gap": 10
+    },
+    {
+      "a": 17,
+      "b": 63,
+      "score": 0.686,
+      "gap": 15
+    },
+    {
+      "a": 14,
+      "b": 37,
+      "score": 0.542,
+      "gap": 13
+    },
+    {
+      "a": 5,
+      "b": 34,
+      "score": 0.516,
+      "gap": 3
+    }
+  ],
+  "issue_results": [
+    {
+      "alert": {
+        "type": "jump",
+        "track_id": 4,
+        "frame": 399,
+        "detail": "dịch 1.45 lần kích thước/frame, đổi cỡ x1.00"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[JUMP] Track #4: dịch 1.45 lần kích thước/frame, đổi cỡ x1.00"
+    },
+    {
+      "alert": {
+        "type": "switch",
+        "track_id": 26,
+        "other_id": 27,
+        "frame": 408,
+        "detail": "nghi hoán ID giữa track 26 và 27"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[SWITCH] Track #26 & #27: nghi hoán ID giữa track 26 và 27"
+    },
+    {
+      "alert": {
+        "type": "switch",
+        "track_id": 37,
+        "other_id": 38,
+        "frame": 398,
+        "detail": "nghi hoán ID giữa track 37 và 38"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[SWITCH] Track #37 & #38: nghi hoán ID giữa track 37 và 38"
+    },
+    {
+      "alert": {
+        "type": "jump",
+        "track_id": 56,
+        "frame": 400,
+        "detail": "dịch 3.77 lần kích thước/frame, đổi cỡ x1.00"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[JUMP] Track #56: dịch 3.77 lần kích thước/frame, đổi cỡ x1.00"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 34,
+        "other_id": 61,
+        "frame": 389,
+        "detail": "gợi ý nối với track 61 (gap 4 frames, score 0.994)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #34 & #61: gợi ý nối với track 61 (gap 4 frames, score 0.994)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 58,
+        "other_id": 68,
+        "frame": 166,
+        "detail": "gợi ý nối với track 68 (gap 10 frames, score 0.993)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #58 & #68: gợi ý nối với track 68 (gap 10 frames, score 0.993)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 36,
+        "other_id": 67,
+        "frame": 268,
+        "detail": "gợi ý nối với track 67 (gap 14 frames, score 0.972)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #36 & #67: gợi ý nối với track 67 (gap 14 frames, score 0.972)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 13,
+        "other_id": 65,
+        "frame": 14,
+        "detail": "gợi ý nối với track 65 (gap 6 frames, score 0.97)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #13 & #65: gợi ý nối với track 65 (gap 6 frames, score 0.97)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 40,
+        "other_id": 59,
+        "frame": 276,
+        "detail": "gợi ý nối với track 59 (gap 14 frames, score 0.966)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #40 & #59: gợi ý nối với track 59 (gap 14 frames, score 0.966)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 50,
+        "other_id": 64,
+        "frame": 397,
+        "detail": "gợi ý nối với track 64 (gap 16 frames, score 0.901)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #50 & #64: gợi ý nối với track 64 (gap 16 frames, score 0.901)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 55,
+        "other_id": 62,
+        "frame": 224,
+        "detail": "gợi ý nối với track 62 (gap 18 frames, score 0.861)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #55 & #62: gợi ý nối với track 62 (gap 18 frames, score 0.861)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 52,
+        "other_id": 53,
+        "frame": 401,
+        "detail": "gợi ý nối với track 53 (gap 2 frames, score 0.805)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #52 & #53: gợi ý nối với track 53 (gap 2 frames, score 0.805)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 8,
+        "other_id": 60,
+        "frame": 282,
+        "detail": "gợi ý nối với track 60 (gap 10 frames, score 0.797)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #8 & #60: gợi ý nối với track 60 (gap 10 frames, score 0.797)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 17,
+        "other_id": 63,
+        "frame": 307,
+        "detail": "gợi ý nối với track 63 (gap 15 frames, score 0.686)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #17 & #63: gợi ý nối với track 63 (gap 15 frames, score 0.686)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 14,
+        "other_id": 37,
+        "frame": 288,
+        "detail": "gợi ý nối với track 37 (gap 13 frames, score 0.542)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #14 & #37: gợi ý nối với track 37 (gap 13 frames, score 0.542)"
+    },
+    {
+      "alert": {
+        "type": "merge_suggestion",
+        "track_id": 5,
+        "other_id": 34,
+        "frame": 162,
+        "detail": "gợi ý nối với track 34 (gap 3 frames, score 0.516)"
+      },
+      "status": "skipped",
+      "reason": "duplicate_issue",
+      "message": "[MERGE_SUGGESTION] Track #5 & #34: gợi ý nối với track 34 (gap 3 frames, score 0.516)"
+    }
+  ]
+}
