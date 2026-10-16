@@ -1,9 +1,12 @@
 """Giải thích vì sao cặp track A -> B có / không được gợi ý nối.
-  python explain_pair.py mot  <gt.txt>    <fps> <config.yaml> --a ID --b ID [--no-scale] [--min-score 0.5]
-  python explain_pair.py cvat <task_id>   <fps> <config.yaml> --a ID --b ID
-  python explain_pair.py bdd  <file.json> <fps> <config.yaml> --a ID --b ID   (cần adapters.bdd.load_bdd_video)
+  python -m tools.diagnose.explain_pair mot  <gt.txt>    <fps> <config.yaml> --a ID --b ID [--no-scale] [--min-score 0.5]
+  python -m tools.diagnose.explain_pair cvat <job_id>    <fps> <config.yaml> --a ID --b ID
 """
-import os, sys, argparse, yaml
+import os, sys, argparse, yaml, pathlib
+_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 from math import hypot, exp
 from core.config import resolve_cfg
 from core.rules import center, size
@@ -112,8 +115,10 @@ if __name__ == "__main__":
         except Exception:
             pass
     elif args.source == "cvat":
-        from cvat_loader import load_cvat
-        tracks = load_cvat(args.path)
+        from adapters.cvat_api import get_client, load_job_tracks
+        client = get_client()
+        with client:
+            tracks, fsz = load_job_tracks(client, int(args.path), interpolate=True, use_client_id=True)
     else:
         from adapters.bdd import load_bdd_video
         tracks = load_bdd_video(args.path)

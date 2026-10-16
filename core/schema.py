@@ -22,7 +22,8 @@ class Track:
 
     @property
     def start(self):
-        return min(self.boxes)
+        vis = [f for f, b in self.boxes.items() if not b.outside]
+        return min(vis) if vis else min(self.boxes)
 
     @property
     def end(self):

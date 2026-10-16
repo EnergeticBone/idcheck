@@ -12,7 +12,7 @@ from core.rules import run_rules
 from core.evaluate import evaluate_rules, evaluate_merge, TYPES
 
 split = sys.argv[1]
-cfg = yaml.safe_load(open(sys.argv[2] if len(sys.argv) > 2 else "config.yaml"))
+cfg = yaml.safe_load(open(sys.argv[2] if len(sys.argv) > 2 else "config_base.yaml"))
 n = int(sys.argv[3]) if len(sys.argv) > 3 else 10
 n_seeds = int(sys.argv[4]) if len(sys.argv) > 4 else 3
 seqs = yaml.safe_load(open("splits.yaml"))[split]

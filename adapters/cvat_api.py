@@ -29,11 +29,21 @@ def load_job_tracks(client, job_id, interpolate=True, use_client_id=True):
     job = client.jobs.retrieve(job_id)
     labels = {lbl.id: lbl.name for lbl in job.get_labels()}
 
+    frame_size = None
+    try:
+        jmeta = job.get_meta()
+        frames = jmeta.get("frames", [])
+        if frames and "width" in frames[0] and "height" in frames[0]:
+            frame_size = (int(frames[0]["width"]), int(frames[0]["height"]))
+    except Exception:
+        pass
+
     meta = {
         "job_id": job_id,
         "task_id": getattr(job, "task_id", None),
         "stage": getattr(job, "stage", None),
         "state": getattr(job, "state", None),
+        "frame_size": frame_size,
         "server_to_client_id": {},
         "client_to_server_id": {},
     }
@@ -215,7 +225,7 @@ def check_job(client, job_id, cfg, create_issues=False, dry_run=False, include_m
     """Kiểm tra toàn diện một job CVAT: tải tracks, chạy rules, tìm merge và tùy chọn tạo issue."""
     tracks, meta = load_job_tracks(client, job_id, interpolate=True)
     alerts = run_rules(tracks, cfg)
-    merges = suggest_merges(tracks, cfg, min_score=min_score)
+    merges = suggest_merges(tracks, cfg, min_score=min_score, frame_size=meta.get("frame_size"))
 
     issue_results = []
     if create_issues or dry_run:

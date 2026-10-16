@@ -5,7 +5,7 @@ from scipy.optimize import linear_sum_assignment
 from core.rules import center, size, params
 
 BIG = 1e6
-DEFAULTS = dict(max_merge_gap=30, max_merge_dist=2.0, max_merge_scale=2.0, merge_max_cost=3.5)
+DEFAULTS = dict(max_merge_gap=30, max_merge_dist=2.0, max_merge_scale=2.0, merge_max_cost=3.5, min_merge_track_len=4)
 
 
 def _p(cfg, label):
@@ -58,9 +58,16 @@ def suggest_merges(tracks, cfg, min_score=0.0, frame_size=None):
     for i, a in enumerate(ids):
         A = tracks[a]
         p = _p(cfg, A.label)
+        min_track_len = p.get("min_merge_track_len", 3)
+        vis_a = sum(1 for x in A.boxes.values() if not x.outside)
+        if vis_a < min_track_len:
+            continue
         a_end = A.boxes[A.end]
         for j, b in enumerate(ids):
             B = tracks[b]
+            vis_b = sum(1 for x in B.boxes.values() if not x.outside)
+            if vis_b < min_track_len:
+                continue
             gap = B.start - A.end
             if a == b or A.label != B.label or not (1 <= gap <= p["max_merge_gap"]):
                 continue
@@ -77,7 +84,10 @@ def suggest_merges(tracks, cfg, min_score=0.0, frame_size=None):
             m = p.get("border_margin", 0)
             vA, vB = _vel(A, tail=True), _vel(B, tail=False)
             if frame_size is not None and m > 0:
-                if _moving_through(a_end, vA, frame_size, m, True) & \
+                both_border = _border_sides(a_end, frame_size, m) & _border_sides(b_start, frame_size, m)
+                if both_border:
+                    g += p.get("border_penalty", 2.0)      # A kết thúc và B bắt đầu ở cùng mép
+                elif _moving_through(a_end, vA, frame_size, m, True) & \
                    _moving_through(b_start, vB, frame_size, m, False):
                     g += p.get("border_penalty", 2.0)      # A đi ra, B đi vào cùng mép
             sa, sb = hypot(*vA), hypot(*vB)

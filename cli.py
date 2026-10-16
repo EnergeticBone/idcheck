@@ -28,7 +28,13 @@ def load_config(config_path, fps=None):
         return {}
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
-    return resolve_cfg(cfg, fps) if fps else cfg
+    if fps is not None:
+        return resolve_cfg(cfg, fps)
+    has_seconds = any(k.endswith("_s") or k == "max_speed" for k in cfg.get("default", {}))
+    if has_seconds:
+        effective_fps = cfg.get("fps", 30.0)
+        return resolve_cfg(cfg, effective_fps)
+    return cfg
 
 
 def print_report(alerts, merges=None, issue_results=None):
@@ -245,6 +251,20 @@ def cmd_watch(args):
         time.sleep(args.interval)
 
 
+def cmd_calibrate(args):
+    from tools.tune.calibrate_project import calibrate_project
+
+    client = get_client(host=args.host, user=args.user, password=args.password)
+    calibrate_project(
+        client=client,
+        project_id=args.project,
+        job_ids=args.jobs,
+        fps=args.fps or 5.0,
+        base_config_path=args.base_config,
+        out_config_path=args.out,
+    )
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="IdCheck - Công cụ kiểm tra chất lượng nhãn video tracking cho CVAT")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -252,7 +272,7 @@ def build_parser():
     # Subcommand: check-xml
     p_xml = subparsers.add_parser("check-xml", help="Kiểm tra file CVAT for video 1.1 XML xuất từ CVAT")
     p_xml.add_argument("xml_file", help="Đường dẫn file .xml")
-    p_xml.add_argument("-c", "--config", default="config.yaml", help="Đường dẫn file cấu hình YAML")
+    p_xml.add_argument("-c", "--config", default="config_base.yaml", help="Đường dẫn file cấu hình YAML")
     p_xml.add_argument("--min-score", type=float, default=0.5, help="Ngưỡng score tối thiểu cho merge suggestion")
     p_xml.add_argument("--no-interpolate", action="store_true", help="Không nội suy tuyến tính giữa các keyframe")
     p_xml.add_argument("--json", action="store_true", help="Xuất kết quả định dạng JSON")
@@ -261,7 +281,7 @@ def build_parser():
     # Subcommand: check-job
     p_job = subparsers.add_parser("check-job", help="Kiểm tra trực tiếp một Job trên CVAT thông qua API")
     p_job.add_argument("job_id", type=int, help="ID của Job trên CVAT")
-    p_job.add_argument("-c", "--config", default="config.yaml", help="Đường dẫn file cấu hình YAML")
+    p_job.add_argument("-c", "--config", default="config_base.yaml", help="Đường dẫn file cấu hình YAML")
     p_job.add_argument("--host", default=None, help="Địa chỉ CVAT host (mặc định lấy từ CVAT_HOST)")
     p_job.add_argument("--user", default=None, help="Tài khoản CVAT (mặc định lấy từ CVAT_USER)")
     p_job.add_argument("--password", default=None, help="Mật khẩu CVAT (mặc định lấy từ CVAT_PASS)")
@@ -275,7 +295,7 @@ def build_parser():
 
     # Subcommand: watch (polling tự động)
     p_watch = subparsers.add_parser("watch", help="Tự động theo dõi các Job trên CVAT và kiểm tra khi chuyển sang Validation")
-    p_watch.add_argument("-c", "--config", default="config.yaml", help="Đường dẫn cấu hình YAML")
+    p_watch.add_argument("-c", "--config", default="config_base.yaml", help="Đường dẫn cấu hình YAML")
     p_watch.add_argument("--host", default=None, help="Địa chỉ CVAT host")
     p_watch.add_argument("--user", default=None, help="Tài khoản CVAT")
     p_watch.add_argument("--password", default=None, help="Mật khẩu CVAT")
@@ -291,7 +311,7 @@ def build_parser():
     p_srv = subparsers.add_parser("server", help="Khởi chạy Webhook Server lắng nghe sự kiện từ CVAT")
     p_srv.add_argument("--server-host", default="0.0.0.0", help="Host lắng nghe (mặc định 0.0.0.0)")
     p_srv.add_argument("-p", "--server-port", type=int, default=5000, help="Cổng lắng nghe (mặc định 5000)")
-    p_srv.add_argument("-c", "--config", default="config.yaml", help="Đường dẫn cấu hình YAML")
+    p_srv.add_argument("-c", "--config", default="config_base.yaml", help="Đường dẫn cấu hình YAML")
     p_srv.add_argument("--cvat-host", default=None, help="Địa chỉ CVAT host")
     p_srv.add_argument("--cvat-user", default=None, help="Tài khoản CVAT")
     p_srv.add_argument("--cvat-password", default=None, help="Mật khẩu CVAT")
@@ -302,6 +322,18 @@ def build_parser():
     p_srv.add_argument("--min-score", type=float, default=0.5, help="Ngưỡng score tối thiểu cho merge suggestion")
     p_srv.add_argument("--force-check", action="store_true", help="Chạy kiểm tra trên mọi sự kiện không phân biệt stage")
     p_srv.set_defaults(func=run_webhook_server)
+
+    # Subcommand: calibrate (Auto-tuning từ jobs acceptance)
+    p_cal = subparsers.add_parser("calibrate", help="Tự động hiệu chỉnh ngưỡng từ các Job Ground Truth trên CVAT")
+    p_cal.add_argument("--project", type=int, required=True, help="Project ID trên CVAT")
+    p_cal.add_argument("--jobs", type=int, nargs="+", default=None, help="Danh sách Job ID chỉ định (mặc định lấy các job stage=acceptance)")
+    p_cal.add_argument("-c", "--base-config", default="config_base.yaml", help="File cấu hình nền")
+    p_cal.add_argument("-o", "--out", default=None, help="File cấu hình đầu ra xuất bản")
+    p_cal.add_argument("--host", default=None, help="Địa chỉ CVAT host")
+    p_cal.add_argument("--user", default=None, help="Tài khoản CVAT")
+    p_cal.add_argument("--password", default=None, help="Mật khẩu CVAT")
+    p_cal.add_argument("--fps", type=float, default=5.0, help="FPS của video (mặc định 5.0 cho BDD100K)")
+    p_cal.set_defaults(func=cmd_calibrate)
 
     for sp in (p_xml, p_job, p_watch, p_srv):
         sp.add_argument("--fps", type=float, default=None,

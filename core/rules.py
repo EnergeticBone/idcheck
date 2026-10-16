@@ -35,6 +35,9 @@ def check_gaps(tr, cfg):
         missing = b - a - 1
         if not (p["min_missing_gap"] <= missing <= p["max_missing_gap"]):
             continue
+        # Bỏ qua nếu annotator chủ động đánh dấu outside ở giữa khoảng gap
+        if any(f in tr.boxes and tr.boxes[f].outside for f in range(a + 1, b)):
+            continue
         A, B = tr.boxes[a], tr.boxes[b]
         if skip_occ and (A.occluded or B.occluded):
             continue
@@ -64,23 +67,60 @@ def _others_shift(index, exclude_id, a, b, min_tracks):
 
 def check_jumps(tr, cfg, index=None):
     p, errs, last = params(cfg, tr.label), [], -10**9
+    skip_occ_scale = p.get("skip_occluded_scale", True)
+    min_box_size = p.get("min_box_size", 30.0)
+    m = p.get("border_margin", 0)
+    frame_size = p.get("frame_size", (1280, 720))
+    max_disp = p.get("max_disp_ratio", 3.0)
+    entry_mult = p.get("entry_disp_mult", 1.6)
+
+    def _touching_border(b):
+        if m <= 0 or not frame_size:
+            return False
+        W, H = frame_size
+        return b.x1 <= m or b.x2 >= W - m or b.y1 <= m or b.y2 >= H - m
+
     fs = sorted(f for f, b in tr.boxes.items() if not b.outside)
-    for a, b in zip(fs, fs[1:]):
+    for i, (a, b) in enumerate(zip(fs, fs[1:])):
         if b - a > p["max_frame_step"]:
             continue
         A, B = tr.boxes[a], tr.boxes[b]
         (xa, ya), (xb, yb) = center(A), center(B)
-        disp = hypot(xb - xa, yb - ya) / size(A) / (b - a)
+        eff_size = max(size(A), min_box_size)
+        disp = hypot(xb - xa, yb - ya) / eff_size / (b - a)
         ratio = size(B) / size(A)
-        bad_scale = not (1 / p["max_scale"] < ratio < p["max_scale"])
-        if disp > p["max_disp_ratio"] or bad_scale:
+
+        # 1. Bỏ qua đổi cỡ nếu bị che khuất hoặc xe đang đi ra/vào từ mép khung hình
+        if (skip_occ_scale and (A.occluded or B.occluded)) or _touching_border(A) or _touching_border(B):
+            bad_scale = False
+        else:
+            bad_scale = not (1 / p["max_scale"] < ratio < p["max_scale"])
+
+        # Nới lỏng nhẹ ngưỡng dịch chuyển ở bước đầu tiên khi đối tượng mới trượt vào tầm nhìn
+        effective_max_disp = max_disp * (entry_mult if i == 0 else 1.0)
+
+        # 2. Kiểm tra tính liên tục theo hướng (quán tính chuyển động mượt khi xe trượt vào)
+        is_smooth_drift = False
+        if disp > effective_max_disp and not bad_scale and i + 2 < len(fs) and disp <= effective_max_disp * 1.5:
+            c = fs[i + 2]
+            if c - b <= p["max_frame_step"]:
+                C = tr.boxes[c]
+                (xc, yc) = center(C)
+                v1 = ((xb - xa) / (b - a), (yb - ya) / (b - a))
+                v2 = ((xc - xb) / (c - b), (yc - yb) / (c - b))
+                dot = v1[0] * v2[0] + v1[1] * v2[1]
+                s1, s2 = hypot(*v1), hypot(*v2)
+                if s1 > 0 and s2 > 0 and (dot / (s1 * s2) > 0.5) and (s2 >= 0.25 * s1):
+                    is_smooth_drift = True
+
+        if (disp > effective_max_disp or bad_scale) and not is_smooth_drift:
             if (p.get("compensate_camera", False) and index is not None
                     and not bad_scale):
-                g = _others_shift(index, tr.id, a, b, p.get("cam_min_tracks", 4))
+                g = _others_shift(index, tr.id, a, b, p.get("cam_min_tracks", 3))
                 if g is not None:
-                    comp = hypot(xb - xa - g[0], yb - ya - g[1]) / size(A) / (b - a)
-                    if comp <= p["max_disp_ratio"]:
-                        continue          # cả cảnh dịch cùng nhau: camera, không phải lỗi nhãn
+                    comp = hypot(xb - xa - g[0], yb - ya - g[1]) / eff_size / (b - a)
+                    if comp <= max_disp:
+                        continue          # cả cảnh dịch cùng nhau: camera rẽ cua/đánh lái
             if b - last <= 2:          # box nhảy đi rồi nhảy về: chỉ báo một lần
                 continue
             last = b

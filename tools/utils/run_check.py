@@ -13,7 +13,7 @@ from core.merge import suggest_merges
 
 seq, n = sys.argv[1], int(sys.argv[2])
 gt = glob.glob(f"data/clean/**/{seq}/gt/gt.txt", recursive=True)[0]
-cfg = yaml.safe_load(open(sys.argv[3] if len(sys.argv) > 3 else "config.yaml"))
+cfg = yaml.safe_load(open(sys.argv[3] if len(sys.argv) > 3 else "config_base.yaml"))
 fps = load_fps(gt)
 cfg = scale_cfg(cfg, fps)
 

@@ -10,9 +10,11 @@ default:
   dup_iou: 0.7
   dup_min_ratio: 0.6
   skip_occluded_gap: false
+  skip_occluded_scale: true
   max_merge_dist: 2.0    # khoảng cách dự đoán / kích thước box
   max_merge_scale: 2.0   # tỉ lệ kích thước tối đa giữa box cuối của A và box đầu của B
   merge_max_cost: 1.6    # chi phí tối đa để chấp nhận ghép cặp
+  min_merge_track_len: 4 # số frame visible tối thiểu để cho phép ghép nối track
   border_margin: 30      # px: box cách mép khung nhỏ hơn mức này coi là chạm mép
   border_penalty: 2.0    # cộng vào chi phí khi A kết thúc và B bắt đầu ở cùng một mép
   swap_min_disp: 0.0
