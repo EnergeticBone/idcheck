@@ -1,5 +1,13 @@
 from core.schema import Box, Track
-from core.rules import check_gaps, check_jumps, check_class_flips, check_duplicates, check_switches, build_center_index
+from core.rules import (
+    check_invalid_boxes,
+    check_gaps,
+    check_jumps,
+    check_class_flips,
+    check_duplicates,
+    check_switches,
+    build_center_index,
+)
 from core.inject import swap_ids
 
 CFG = {"default": dict(min_missing_gap=2, max_missing_gap=15, max_frame_step=3,
@@ -27,6 +35,8 @@ def test_jump_reported_once():
     tr.boxes[15].x2 += 40
     errs = check_jumps(tr, CFG)
     assert len(errs) == 1 and errs[0]["frame"] == 15
+    assert errs[0].get("subtype") == "spike"
+    assert "Spike" in errs[0]["detail"]
 
 
 def test_normal_motion_is_not_jump():
@@ -127,3 +137,30 @@ def test_single_jump_survives_compensation():
     b.x2 += 60
     idx = build_center_index(tracks)
     assert len(check_jumps(tracks[1], CAM, idx)) >= 1
+
+
+def test_invalid_boxes_detected():
+    # 1. Box có chiều rộng hoặc chiều cao <= 0
+    tr1 = Track(1, "car", {
+        0: Box(0, 100, 100, 90, 150, "car"),   # x2 < x1: width âm
+        1: Box(1, 100, 100, 150, 100, "car"),   # y2 == y1: height = 0
+    })
+    errs1 = check_invalid_boxes(tr1, CFG)
+    assert len(errs1) == 2
+    assert all(e["type"] == "invalid_box" for e in errs1)
+
+    # 2. Box nằm hoàn toàn ngoài khung hình
+    tr2 = Track(2, "car", {
+        0: Box(0, -100, 100, -20, 150, "car"),     # x2 <= 0 (ngoài mép trái)
+        1: Box(1, 1300, 100, 1350, 150, "car"),    # x1 >= 1280 (ngoài mép phải)
+    })
+    errs2 = check_invalid_boxes(tr2, CFG, frame_size=(1280, 720))
+    assert len(errs2) == 2
+    assert all(e["type"] == "invalid_box" for e in errs2)
+
+    # 3. Box hợp lệ hoặc có cờ outside không bị bắt
+    tr3 = Track(3, "car", {
+        0: Box(0, 100, 100, 150, 150, "car"),
+        1: Box(1, 100, 100, 100, 100, "car", outside=True),  # outside marker
+    })
+    assert check_invalid_boxes(tr3, CFG, frame_size=(1280, 720)) == []

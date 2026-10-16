@@ -93,8 +93,8 @@ def cmd_check_xml(args):
     meta = load_cvat_xml_meta(args.xml_file)
     tracks = load_cvat_xml(args.xml_file, interpolate=not args.no_interpolate)
 
-    alerts = run_rules(tracks, cfg)
     frame_size = (meta["width"], meta["height"]) if meta.get("width") and meta.get("height") else None
+    alerts = run_rules(tracks, cfg, frame_size=frame_size)
     merges = suggest_merges(tracks, cfg, min_score=args.min_score, frame_size=frame_size)
 
     if args.json:
@@ -265,6 +265,35 @@ def cmd_calibrate(args):
     )
 
 
+def cmd_studio(args):
+    import studio
+    from studio.server import Handler, ThreadingHTTPServer
+    import webbrowser
+    import threading
+
+    url = f"http://{args.host}:{args.port}"
+    logger.info("Khởi chạy idcheck QA Studio tại %s", url)
+    print("\n" + "=" * 60)
+    print(" idcheck QA Studio (Web UI + idcheck core rules)")
+    print(f" URL: {url}")
+    print(" Dừng server bằng tổ hợp phím Ctrl+C")
+    print("=" * 60 + "\n", flush=True)
+
+    if not args.no_browser and args.host in ("127.0.0.1", "localhost"):
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+
+    try:
+        httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("Đã dừng idcheck QA Studio.")
+    finally:
+        try:
+            httpd.server_close()
+        except Exception:
+            pass
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="IdCheck - Công cụ kiểm tra chất lượng nhãn video tracking cho CVAT")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -333,7 +362,12 @@ def build_parser():
     p_cal.add_argument("--user", default=None, help="Tài khoản CVAT")
     p_cal.add_argument("--password", default=None, help="Mật khẩu CVAT")
     p_cal.add_argument("--fps", type=float, default=5.0, help="FPS của video (mặc định 5.0 cho BDD100K)")
-    p_cal.set_defaults(func=cmd_calibrate)
+    # Subcommand: studio (Web QA Studio)
+    p_studio = subparsers.add_parser("studio", aliases=["web"], help="Khởi chạy idcheck QA Studio (Giao diện Web)")
+    p_studio.add_argument("--host", default="127.0.0.1", help="Host lắng nghe (mặc định 127.0.0.1, dùng 0.0.0.0 để mở ra mạng ngoài)")
+    p_studio.add_argument("-p", "--port", type=int, default=8765, help="Cổng chạy server (mặc định 8765)")
+    p_studio.add_argument("--no-browser", action="store_true", help="Không tự động mở trình duyệt")
+    p_studio.set_defaults(func=cmd_studio)
 
     for sp in (p_xml, p_job, p_watch, p_srv):
         sp.add_argument("--fps", type=float, default=None,

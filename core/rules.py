@@ -27,6 +27,39 @@ def params(cfg, label):
     return p
 
 
+def check_invalid_boxes(tr, cfg, frame_size=None):
+    """Kiểm tra tính toàn vẹn hình học của các box trong track:
+    1. Kích thước bất thường: width <= 0 hoặc height <= 0 (bẹp hoặc kéo ngược tọa độ)
+    2. Văng ra ngoài khung hình: box nhìn thấy nhưng nằm hoàn toàn ngoài phạm vi canvas
+    """
+    p = params(cfg, tr.label)
+    fsz = frame_size or p.get("frame_size")
+    errs = []
+    for f, b in tr.boxes.items():
+        if b.outside:
+            continue
+        w = b.x2 - b.x1
+        h = b.y2 - b.y1
+        if w <= 0 or h <= 0:
+            errs.append(dict(
+                type="invalid_box",
+                track_id=tr.id,
+                frame=f,
+                detail=f"Kích thước box không hợp lệ: w={w:.1f}, h={h:.1f} (chiều rộng/cao <= 0)"
+            ))
+            continue
+        if fsz:
+            W, H = fsz
+            if b.x2 <= 0 or b.y2 <= 0 or b.x1 >= W or b.y1 >= H:
+                errs.append(dict(
+                    type="invalid_box",
+                    track_id=tr.id,
+                    frame=f,
+                    detail=f"Box nằm hoàn toàn ngoài khung hình ({W}x{H}): [{b.x1:.1f}, {b.y1:.1f}, {b.x2:.1f}, {b.y2:.1f}]"
+                ))
+    return errs
+
+
 def check_gaps(tr, cfg):
     p, errs = params(cfg, tr.label), []
     skip_occ = p.get("skip_occluded_gap", True)
@@ -67,6 +100,7 @@ def _others_shift(index, exclude_id, a, b, min_tracks):
 
 def check_jumps(tr, cfg, index=None):
     p, errs, last = params(cfg, tr.label), [], -10**9
+    skip_spike_frame = -10**9
     skip_occ_scale = p.get("skip_occluded_scale", True)
     min_box_size = p.get("min_box_size", 30.0)
     m = p.get("border_margin", 0)
@@ -121,11 +155,39 @@ def check_jumps(tr, cfg, index=None):
                     comp = hypot(xb - xa - g[0], yb - ya - g[1]) / eff_size / (b - a)
                     if comp <= max_disp:
                         continue          # cả cảnh dịch cùng nhau: camera rẽ cua/đánh lái
-            if b - last <= 2:          # box nhảy đi rồi nhảy về: chỉ báo một lần
+
+            if b == skip_spike_frame:
+                continue
+
+            # Kiểm tra nếu đây là lỗi Spike (box lệch ở b rồi ngay frame c kế tiếp quay lại quỹ đạo của a)
+            is_spike = False
+            next_skip = None
+            if i + 2 < len(fs):
+                c = fs[i + 2]
+                if c - b <= p["max_frame_step"]:
+                    C = tr.boxes[c]
+                    (xc, yc) = center(C)
+                    disp_ac = hypot(xc - xa, yc - ya) / max(size(A), min_box_size) / (c - a)
+                    ratio_ac = size(C) / size(A) if size(A) > 0 else 1.0
+                    scale_ac_ok = (1 / p["max_scale"] < ratio_ac < p["max_scale"]) or (skip_occ_scale and (A.occluded or C.occluded))
+                    if disp_ac <= effective_max_disp and scale_ac_ok:
+                        disp_bc = hypot(xc - xb, yc - yb) / max(size(B), min_box_size) / (c - b)
+                        ratio_bc = size(C) / size(B) if size(B) > 0 else 1.0
+                        bad_scale_bc = not (1 / p["max_scale"] < ratio_bc < p["max_scale"])
+                        if disp_bc > effective_max_disp or bad_scale_bc:
+                            is_spike = True
+                            next_skip = c
+
+            if b - last <= 2 and not is_spike:
                 continue
             last = b
-            errs.append(dict(type="jump", track_id=tr.id, frame=b,
-                             detail=f"dịch {disp:.2f} lần kích thước/frame, đổi cỡ x{ratio:.2f}"))
+            if is_spike:
+                skip_spike_frame = next_skip
+                errs.append(dict(type="jump", track_id=tr.id, frame=b, subtype="spike",
+                                 detail=f"Spike: Box lệch ở frame {b} rồi quay lại quỹ đạo ở frame {next_skip} (dịch {disp:.2f}x, cỡ x{ratio:.2f})"))
+            else:
+                errs.append(dict(type="jump", track_id=tr.id, frame=b,
+                                 detail=f"dịch {disp:.2f} lần kích thước/frame, đổi cỡ x{ratio:.2f}"))
     return errs
 
 
@@ -172,10 +234,11 @@ def check_duplicates(tracks, cfg):
     return errs
 
 
-def run_rules(tracks, cfg):
+def run_rules(tracks, cfg, frame_size=None):
     errs = []
     index = build_center_index(tracks)
     for tr in tracks.values():
+        errs += check_invalid_boxes(tr, cfg, frame_size)
         errs += check_gaps(tr, cfg)
         errs += check_jumps(tr, cfg, index)
         errs += check_class_flips(tr, cfg)

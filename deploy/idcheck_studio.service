@@ -1,0 +1,17 @@
+[Unit]
+Description=idcheck QA Studio Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=tran-tuan-kinh
+WorkingDirectory=/home/tran-tuan-kinh/idcheck
+ExecStart=/usr/bin/python3 /home/tran-tuan-kinh/idcheck/cli.py studio -p 8766 --host 127.0.0.1 --no-browser
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

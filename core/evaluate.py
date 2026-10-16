@@ -1,7 +1,7 @@
 from core.rules import run_rules
 from core.merge import suggest_merges
 
-TYPES = ["gap", "jump", "class_flip", "duplicate", "switch"]
+TYPES = ["gap", "jump", "class_flip", "duplicate", "switch", "invalid_box"]
 
 
 def _ids(e):
@@ -20,7 +20,7 @@ def _match(e, t, tol):
     if e["type"] != t["type"]:
         return False
     k = t["type"]
-    if k in ("gap", "jump", "class_flip"):
+    if k in ("gap", "jump", "class_flip", "invalid_box"):
         return e["track_id"] == t["a"] and abs(e["frame"] - t["frame"]) <= tol
     if k == "duplicate":
         return _ids(e) == _tids(t)

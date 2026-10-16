@@ -1,6 +1,7 @@
 import os
 import logging
-from cvat_sdk import make_client
+import urllib3
+from cvat_sdk.core.client import Client, Config
 from core.schema import Box, Track
 from core.rules import run_rules
 from core.merge import suggest_merges
@@ -9,14 +10,42 @@ from adapters.cvat_xml import _interpolate_track_boxes
 logger = logging.getLogger(__name__)
 
 
-def get_client(host=None, user=None, password=None):
+def _load_env():
+    env_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env"))
+    for p in (env_file, ".env"):
+        if os.path.isfile(p):
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip().strip("'\"")
+                        if k not in os.environ:
+                            os.environ[k] = v
+            break
+
+
+def get_client(host=None, user=None, password=None, insecure=None):
     """Khởi tạo CVAT client từ tham số hoặc biến môi trường."""
+    _load_env()
     host = host or os.environ.get("CVAT_HOST", "http://localhost:8080")
     user = user or os.environ.get("CVAT_USER", "")
     password = password or os.environ.get("CVAT_PASS", "")
     if not user or not password:
         raise ValueError("Thiếu thông tin xác thực CVAT (CVAT_USER, CVAT_PASS)")
-    return make_client(host=host, credentials=(user, password))
+
+    if insecure is None:
+        insecure = os.environ.get("CVAT_INSECURE", "1").lower() in ("1", "true", "yes")
+
+    if insecure:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        config = Config(verify_ssl=False)
+    else:
+        config = None
+
+    client = Client(url=host, config=config)
+    client.login((user, password))
+    return client
 
 
 def load_job_tracks(client, job_id, interpolate=True, use_client_id=True):
@@ -224,7 +253,7 @@ def post_merges_as_issues(client, job_id, merges, tracks=None, dry_run=False, sk
 def check_job(client, job_id, cfg, create_issues=False, dry_run=False, include_merges=True, min_score=0.5):
     """Kiểm tra toàn diện một job CVAT: tải tracks, chạy rules, tìm merge và tùy chọn tạo issue."""
     tracks, meta = load_job_tracks(client, job_id, interpolate=True)
-    alerts = run_rules(tracks, cfg)
+    alerts = run_rules(tracks, cfg, frame_size=meta.get("frame_size"))
     merges = suggest_merges(tracks, cfg, min_score=min_score, frame_size=meta.get("frame_size"))
 
     issue_results = []

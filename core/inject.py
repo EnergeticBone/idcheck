@@ -140,7 +140,10 @@ def inject_many(clean, n_per_type=10, seed=0, min_len=30, margin=10,
             peer = _nearest_peer(tracks, tid, at, used)
             return swap_ids(tracks, tid, peer, at) if peer is not None else None
         if kind == "class_flip":
-            return flip_class(tracks, tid, at, rng.randint(3, 8), "car")
+            orig = tracks[tid].label
+            candidates = [l for l in ["car", "pedestrian", "truck", "bus", "bicycle", "motorcycle"] if l != orig]
+            new_lbl = rng.choice(candidates) if candidates else "pedestrian"
+            return flip_class(tracks, tid, at, rng.randint(3, 8), new_lbl)
         return duplicate_track(tracks, tid, shift=rng.uniform(1, 3))
 
     for _ in range(n_per_type):
