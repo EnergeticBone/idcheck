@@ -16,11 +16,11 @@ from http.cookies import SimpleCookie
 import threading
 import webbrowser
 from urllib.parse import urlsplit, unquote
-from backend.orchestrator import ROUTES
+from studio.backend.orchestrator import ROUTES
 from studio_core.parsers import parse_cvat_archive
-from backend.media import STORE, MAX_ZIP_BYTES
-from backend.video import VIDEO, MAX_VIDEO_BYTES
-from backend import projects, auth, workflow, cvat_workflow, benchmark
+from studio.backend.media import STORE, MAX_ZIP_BYTES
+from studio.backend.video import VIDEO, MAX_VIDEO_BYTES
+from studio.backend import projects, auth, workflow, cvat_workflow, benchmark
 
 ROOT=Path(__file__).resolve().parent
 STATIC=ROOT/'static'
@@ -114,8 +114,11 @@ class Handler(SimpleHTTPRequestHandler):
                      '/api/auth/cvat-users','/api/auth/set-role'}
         workflow_routes={'/api/workflow/list','/api/workflow/transition'}
         cvat_routes={'/api/cvat/jobs','/api/cvat/job/submit-validation','/api/cvat/job/open',
-                     '/api/cvat/job/reject-and-raise','/api/cvat/job/accept','/api/cvat/job/assign','/api/cvat/users'}
-        if route not in ('/api/media/upload-zip','/api/video/upload','/api/annotation/import') and route not in ROUTES and route not in PROJECT_ROUTES and route not in auth_routes and route not in workflow_routes and route not in cvat_routes:
+                     '/api/cvat/organizations','/api/cvat/organization/set',
+                     '/api/cvat/job/reject-and-raise','/api/cvat/job/accept','/api/cvat/job/assign',
+                     '/api/cvat/users','/api/cvat/job/push','/api/cvat/configs','/api/cvat/calibrate'}
+        benchmark_routes={'/api/benchmark/evaluate'}
+        if route not in ('/api/media/upload-zip','/api/video/upload','/api/annotation/import') and route not in ROUTES and route not in PROJECT_ROUTES and route not in auth_routes and route not in workflow_routes and route not in cvat_routes and route not in benchmark_routes:
             return self.json({'error':'Không tìm thấy API'},404)
         try:
             actor = None if route in ('/api/auth/setup','/api/auth/login') else self.actor()
@@ -161,7 +164,11 @@ class Handler(SimpleHTTPRequestHandler):
             if route=='/api/auth/set-role':return self.json(auth.set_user_role(req,actor))
             if route=='/api/workflow/list':return self.json(workflow.list_tasks(req,actor))
             if route=='/api/workflow/transition':return self.json(workflow.transition(req,actor))
-            if route=='/api/cvat/jobs':return self.json(cvat_workflow.list_jobs(actor))
+            if route=='/api/cvat/jobs':return self.json(cvat_workflow.list_jobs(actor, req))
+            if route=='/api/cvat/organizations':return self.json(cvat_workflow.list_organizations(actor))
+            if route=='/api/cvat/organization/set':return self.json(cvat_workflow.set_active_organization(req, actor))
+            if route=='/api/cvat/configs':return self.json(cvat_workflow.list_configs())
+            if route=='/api/cvat/calibrate':return self.json(cvat_workflow.calibrate_from_jobs(req, actor))
             if route=='/api/cvat/job/submit-validation':return self.json(cvat_workflow.submit_for_validation(req,actor))
             if route=='/api/cvat/job/open':return self.json(cvat_workflow.open_cvat_job(req,actor))
             if route=='/api/cvat/job/reject-and-raise':return self.json(cvat_workflow.reject_and_raise_issues(req,actor))

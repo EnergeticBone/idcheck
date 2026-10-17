@@ -67,3 +67,22 @@ def test_boxes_to_cvat():
     # Check that an outside keyframe was added at frame 3
     shapes = t['shapes']
     assert any(s['outside'] is True and s['frame'] == 3 for s in shapes)
+
+
+def test_absent_class_flip():
+    from studio.backend.benchmark import _is_absent_class_flip
+    boxes = [
+        {'frame_id': 0, 'track_id': 1, 'x': 10, 'y': 10, 'w': 20, 'h': 20, 'class_name': 'Car'},
+        {'frame_id': 1, 'track_id': 1, 'x': 12, 'y': 12, 'w': 20, 'h': 20, 'class_name': 'Car'},
+    ]
+    gt_absent = {'type': 'Class Change', 'track_id': 1, 'frame': 0, 'planted': 'class_flip 1'}
+    # Track 1 has only 1 class ('Car'), so the class flip is absent (lost during CVAT XML export)
+    assert _is_absent_class_flip(gt_absent, boxes) is True
+
+    # If track actually had different classes, it is not absent
+    boxes_with_flip = [
+        {'frame_id': 0, 'track_id': 1, 'x': 10, 'y': 10, 'w': 20, 'h': 20, 'class_name': 'Car'},
+        {'frame_id': 1, 'track_id': 1, 'x': 12, 'y': 12, 'w': 20, 'h': 20, 'class_name': 'Pedestrian'},
+    ]
+    assert _is_absent_class_flip(gt_absent, boxes_with_flip) is False
+

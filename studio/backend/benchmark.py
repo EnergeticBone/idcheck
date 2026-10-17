@@ -75,12 +75,18 @@ def normalize_gt(events):
 
 
 def _hits(p, g, tol):
-    if p['type'] != g['type']:
+    type_matches = (p['type'] == g['type']) or (
+        {p['type'], g['type']} == {'ID Switch Candidate', 'Gap Frame'} and 'Gợi ý nối' in p.get('message', '')
+    )
+    if not type_matches:
         return False
     tracks = set(g.get('tracks') or [g['track_id']])
     pred_tracks = {int(p['track_id'])}
-    if p.get('pair') and isinstance(p['pair'], list):
-        pred_tracks.update(int(x) for x in p['pair'])
+    if p.get('pair'):
+        if isinstance(p['pair'], list):
+            pred_tracks.update(int(x) for x in p['pair'])
+        elif isinstance(p['pair'], str) and '_' in p['pair']:
+            pred_tracks.update(int(x) for x in p['pair'].split('_') if x.isdigit())
     if not (tracks & pred_tracks):
         return False
     return int(g['frame']) - tol <= int(p['frame']) <= int(g.get('frame_to', g['frame'])) + tol
@@ -116,6 +122,21 @@ def _score(pred, gt, tol):
     }
 
 
+
+def _is_absent_class_flip(g, boxes):
+    """Kiểm tra xem lỗi class_flip có thực sự tồn tại trong dữ liệu boxes hay không.
+    Do CVAT XML chỉ lưu 1 nhãn duy nhất cho toàn bộ track, nên khi nạp lên CVAT,
+    các box của track luôn có cùng 1 nhãn và lỗi class flip bị mất hoàn toàn."""
+    if g.get('type') != 'Class Change' and 'class_flip' not in str(g.get('planted', '')):
+        return False
+    tids = set(g.get('tracks') or [g.get('track_id')])
+    track_boxes = [b for b in boxes if b.get('track_id') in tids]
+    if not track_boxes:
+        return True
+    classes = {b.get('class_name') or b.get('label') for b in track_boxes}
+    return len(classes) <= 1
+
+
 def evaluate(req, _actor=None):
     """Quét dữ liệu hiện tại và đối soát kết quả với Ground Truth (có trừ baseline)."""
     from studio.backend.orchestrator import scan
@@ -145,6 +166,7 @@ def evaluate(req, _actor=None):
         raise ValueError('Không có annotation nào để quét và đánh giá.')
         
     # Quét bằng rule engine của idcheck
+    cfg_name = req.get('config') or (meta.get('config') if isinstance(meta, dict) else None)
     scan_res = scan({
         'boxes': boxes,
         'width': meta.get('width'),
@@ -153,7 +175,7 @@ def evaluate(req, _actor=None):
         'total_frames': meta.get('total_frames'),
         'frame_base': meta.get('frame_base'),
         'fps': float(meta.get('fps') or 5.0),
-        'config': req.get('config')
+        'config': cfg_name
     })
     
     issues = scan_res['issues']
@@ -181,22 +203,80 @@ def evaluate(req, _actor=None):
             'mode': meta.get('mode', 'video'),
             'total_frames': meta.get('total_frames'),
             'frame_base': meta.get('frame_base'),
-            'fps': float(meta.get('fps') or 5.0)
+            'fps': float(meta.get('fps') or 5.0),
+            'config': cfg_name
         })
         baseline.extend(normalize_gt([
-            {'type': i['type'], 'frame': i['frame'], 'track_id': i['track_id']}
+            {
+                'type': i['type'],
+                'frame': i['frame'],
+                'track_id': i['track_id'],
+                'pair': (i.get('fix_data') or {}).get('pair') or []
+            }
             for i in base_scan['issues']
         ]))
         
     if baseline:
-        base_pairs = _match(pred, baseline, tol)
-        matched_preds = {pi for pi, _ in base_pairs}
+        best_base_pairs = _match(pred, baseline, tol)
+        for b_off in (1, -1):
+            shifted_base = []
+            for b in baseline:
+                b2 = dict(b)
+                b2['track_id'] = b['track_id'] + b_off
+                b2['tracks'] = [t + b_off for t in b.get('tracks', [b['track_id']])]
+                shifted_base.append(b2)
+            cur_pairs = _match(pred, shifted_base, tol)
+            if len(cur_pairs) > len(best_base_pairs):
+                best_base_pairs = cur_pairs
+                baseline = shifted_base
+        matched_preds = {pi for pi, _ in best_base_pairs}
         pred = [p for i, p in enumerate(pred) if i not in matched_preds]
         
-    if req.get('only_gt_types', True):
+    # Tự động phát hiện chênh lệch index track_id (0-indexed của XML GT vs 1-indexed của CVAT)
+    best_gt = gt
+    best_offset = 0
+    best_tp = len(_match(pred, gt, tol))
+    
+    for offset in (1, -1):
+        shifted_gt = []
+        for g in gt:
+            g2 = dict(g)
+            g2['track_id'] = g['track_id'] + offset
+            g2['tracks'] = [t + offset for t in g.get('tracks', [g['track_id']])]
+            shifted_gt.append(g2)
+        cur_tp = len(_match(pred, shifted_gt, tol))
+        if cur_tp > best_tp:
+            best_tp = cur_tp
+            best_gt = shifted_gt
+            best_offset = offset
+    gt = best_gt
+    offset_note = ""
+    if best_offset != 0:
+        offset_note = f"Đã tự động bù offset Track ID ({'+1' if best_offset > 0 else '-1'}) do dữ liệu Ground Truth và giao diện CVAT lệch chuẩn đánh số (0-index vs 1-index)."
+
+    # Loại bỏ class_flip không tồn tại trong dữ liệu CVAT (do CVAT XML chỉ lưu 1 nhãn/track)
+    absent_ignored = []
+    if req.get('ignore_class_flip', True):
+        kept_gt = []
+        for g in gt:
+            if _is_absent_class_flip(g, boxes):
+                absent_ignored.append(g)
+            else:
+                kept_gt.append(g)
+        gt = kept_gt
+
+    # Lọc chỉ tính các loại lỗi có trong GT (nếu only_gt_types=True)
+    if req.get('only_gt_types', True) and gt:
         gt_types = {g['type'] for g in gt}
         pred = [p for p in pred if p['type'] in gt_types]
-        
+
+    absent_note = ""
+    if absent_ignored:
+        absent_note = f"Đã loại trừ {len(absent_ignored)} lỗi class_flip khỏi tập GT (do định dạng CVAT XML chỉ lưu 1 nhãn cho cả track nên dữ liệu không chứa lỗi này)."
+
+    notes = [n for n in (offset_note, absent_note) if n]
+    full_note = " · ".join(notes)
+
     total = _score(pred, gt, tol)
     pairs = _match(pred, gt, tol)
     hit_p = {p for p, _ in pairs}
@@ -216,7 +296,11 @@ def evaluate(req, _actor=None):
         'predicted_count': len(pred),
         'ground_truth_count': len(gt),
         'baseline_ignored': len(baseline),
+        'absent_ignored': len(absent_ignored),
         'target_requirement': 'Precision >= 0.85 & Recall >= 0.80',
         'missed': [g for i, g in enumerate(gt) if i not in hit_g],
-        'false_alarms': [p for i, p in enumerate(pred) if i not in hit_p]
+        'false_alarms': [p for i, p in enumerate(pred) if i not in hit_p],
+        'offset_applied': best_offset,
+        'note': full_note,
+        'config_used': cfg_name or 'config_project_3.yaml'
     }

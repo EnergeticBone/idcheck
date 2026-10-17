@@ -28,7 +28,7 @@ SESSIONS_FILE = ROOT_STORAGE / 'sessions.json'
 CVAT_ROLES_FILE = ROOT_STORAGE / 'cvat_roles.json'
 LOCK = threading.RLock()
 SESSION_SECONDS = 12 * 3600
-ROLES = {'admin', 'annotator', 'reviewer'}
+ROLES = {'admin', 'annotator', 'reviewer', 'supervisor', 'worker'}
 
 
 def _load_sessions():
@@ -183,14 +183,15 @@ def login(req):
             # - Nếu là is_staff hoặc group admin hoặc org owner/maintainer -> admin
             # - Nếu org supervisor hoặc group reviewer -> reviewer
             # - Mặc định -> annotator
+            org_r = cvat_user.get('org_role')
             if uname in cvat_roles:
                 role = cvat_roles[uname]
-            elif cvat_user['is_staff'] or 'admin' in cvat_user['groups'] or cvat_user.get('org_role') in ('owner', 'maintainer'):
+            elif cvat_user['is_staff'] or 'admin' in cvat_user['groups'] or org_r in ('owner', 'maintainer'):
                 role = 'admin'
-            elif cvat_user.get('org_role') == 'supervisor' or 'reviewer' in cvat_user['groups']:
-                role = 'reviewer'
+            elif org_r == 'supervisor' or 'reviewer' in cvat_user['groups']:
+                role = 'supervisor'
             else:
-                role = 'annotator'
+                role = 'worker'
 
             token = secrets.token_urlsafe(32)
             SESSIONS[token] = {
@@ -198,6 +199,8 @@ def login(req):
                 'role': role,
                 'source': 'cvat',
                 'cvat_id': cvat_user['id'],
+                'is_staff': cvat_user['is_staff'],
+                'active_org': 'IDCheck',
                 'expiry': time.time() + SESSION_SECONDS
             }
             _write_sessions(SESSIONS)
@@ -226,6 +229,10 @@ def verify(token):
             'username': session['username'],
             'role': session['role'],
             'source': session.get('source', 'cvat'),
+            'active_org': session.get('active_org', 'IDCheck'),
+            'is_staff': session.get('is_staff', False),
+            'id': session.get('cvat_id'),
+            'token': token,
         }
 
 
@@ -330,5 +337,20 @@ def set_user_role(req, actor):
 
 
 def require(actor, *roles):
-    if actor['role'] not in roles:
+    r = actor.get('role', '')
+    if r == 'admin':
+        return
+    if r in ('supervisor', 'reviewer') and any(x in ('reviewer', 'supervisor', 'worker', 'annotator') for x in roles):
+        return
+    if r in ('worker', 'annotator') and any(x in ('worker', 'annotator') for x in roles):
+        return
+    if r not in roles:
         raise PermissionError('Không đủ quyền: yêu cầu vai trò ' + '/'.join(roles))
+
+
+def update_session_org_and_role(token, org_slug, role):
+    with LOCK:
+        if token in SESSIONS:
+            SESSIONS[token]['active_org'] = org_slug
+            SESSIONS[token]['role'] = role
+            _write_sessions(SESSIONS)

@@ -192,6 +192,9 @@ def check_jumps(tr, cfg, index=None):
 
 
 def check_class_flips(tr, cfg):
+    p = cfg.get("default", {})
+    if not p.get("enable_class_flips", True):
+        return []
     fs = sorted(tr.boxes)
     major = Counter(tr.boxes[f].label for f in fs).most_common(1)[0][0]
     errs, prev_bad = [], False

@@ -87,6 +87,11 @@ body.reviewer-mode .fields input:not([disabled]){background:#f3f5fa;color:#66748
 .issue-actions button.autofix:hover{background:#d1fae5}
 .issue-actions button.autofix-swap{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-weight:700}
 .issue-actions button.autofix-swap:hover{background:#dbeafe}
+.issue-actions button.reject{background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;font-weight:700}
+.issue-actions button.reject:hover{background:#dcfce7;border-color:#86efac}
+.issue-actions button.fix{background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe;font-weight:700}
+.issue-actions button.fix:hover{background:#ede9fe;border-color:#c4b5fd}
+.issue-status.false-positive{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-weight:700}
 
 /* Benchmark Dialog Styles */
 .bm-summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:15px}
@@ -162,4 +167,238 @@ body.reviewer-mode .fields input:not([disabled]){background:#f3f5fa;color:#66748
   .sidebar-user-box{padding:6px 4px;align-items:center}
   .sidebar-user-text{display:none}
   .sidebar-action-btn{padding:5px 2px;font-size:10px}
+}
+
+
+/* Job-level Roles Styles */
+.job-role-pill{font-size:10px;font-weight:750;letter-spacing:.3px;padding:2px 7px;border-radius:12px;margin-left:6px;vertical-align:middle;display:inline-block}
+.job-role-pill.reviewer{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.job-role-pill.annotator{background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0}
+.job-role-pill.admin{background:#fbf3ff;color:#7e22ce;border:1px solid #e9d5ff}
+.cvat-badge.role-tag{font-size:11px;padding:3px 8px;border-radius:6px;font-weight:750}
+.cvat-badge.role-tag.reviewer{background:#3b82f6;color:#fff}
+.cvat-badge.role-tag.annotator{background:#10b981;color:#fff}
+.cvat-role-hint{font-size:11px;margin-top:3px;color:#cbd5e1;font-weight:550}
+
+
+/* Organization Selector */
+.org-selector-box{padding:0 10px 14px;margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,.08)}
+.org-label{font-size:10px;font-weight:750;letter-spacing:1px;color:#7d8ea9;margin-bottom:6px;display:flex;align-items:center;gap:5px}
+.org-select-wrapper{position:relative}
+.org-select{width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:7px 9px;color:#f1f5f9;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.org-select:hover{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.25)}
+.org-select:focus{border-color:#3b82f6!important;background:#182640;color:#fff}
+.org-select option{background:#182640;color:#f1f5f9}
+@media(max-width:1100px){
+  .org-selector-box{display:none}
+}
+
+.operator-role-badge.role-supervisor{background:rgba(37,99,235,.22);color:#93c5fd;border-color:rgba(59,130,246,.4)}
+.operator-role-badge.role-worker{background:rgba(5,150,105,.22);color:#6ee7b7;border-color:rgba(16,185,129,.4)}
+
+/* Calibration & Threshold Tuning */
+.btn-tune-pulse{background:#f0f5ff;border:1px solid #adc1f4;color:#2563eb;font-weight:700;display:inline-flex;align-items:center;gap:5px;transition:all .15s;padding:6px 11px;font-size:12px;border-radius:6px}
+.btn-tune-pulse:hover{background:#dbeafe;border-color:#3b82f6;color:#1d4ed8;transform:translateY(-1px);box-shadow:0 2px 6px rgba(37,99,235,.15)}
+.calibrate-job-row{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid #eef2f7;font-size:12px;background:#fff;transition:background .1s}
+.calibrate-job-row:hover{background:#f8fafc}
+.calibrate-job-row:last-child{border-bottom:none}
+.calibrate-job-label{display:flex;align-items:center;gap:8px;cursor:pointer}
+.calibrate-result-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;background:#f8fafc;padding:12px;border-radius:8px;border:1px solid #e2e8f0;font-size:12px}
+
+/* CVAT-First Workspace Streamline (Option 1) */
+#importBar, .importbar, #importRoleNotice {
+  display: none !important;
+}
+
+.cvat-no-job-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #3b82f6;
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 18px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+  flex-wrap: wrap;
+}
+.cvat-no-job-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.cvat-no-job-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+.cvat-no-job-text h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 750;
+  color: #1e293b;
+}
+.cvat-no-job-text p {
+  margin: 3px 0 0 0;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+
+
+/* Docked Box Info Bar inside Canvas Viewer */
+.canvas-box-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  z-index: 20;
+  color: #fff;
+  font-size: 11px;
+  box-sizing: border-box;
+}
+
+.box-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.box-bar-tag {
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  white-space: nowrap;
+}
+
+.box-bar-tag.active {
+  background: #1e3a8a;
+  color: #fff;
+}
+
+.box-bar-hint {
+  font-size: 11px;
+  color: #8fa0be;
+  white-space: nowrap;
+}
+
+.box-bar-fields {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.box-bar-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 5px;
+  padding: 2px 6px;
+}
+
+.box-bar-field label {
+  font-size: 10px;
+  font-weight: 750;
+  color: #94a3b8;
+  text-transform: uppercase;
+}
+
+.box-bar-field input {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  width: 48px;
+  padding: 2px 0;
+  outline: none;
+}
+
+.box-bar-field input#fieldClass {
+  width: 76px;
+}
+
+.box-bar-field input:disabled {
+  color: #94a3b8;
+  cursor: default;
+}
+
+.box-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  margin-left: auto;
+}
+
+.box-bar-actions button {
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 5px;
+}
+
+@media (max-width: 950px) {
+  .canvas-box-bar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .box-bar-hint {
+    display: none;
+  }
+}
+
+/* Issue Card Header Badges */
+.issue-title-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.issue-title-group b {
+  font-size: 12px;
+  color: #1e293b;
+  margin-right: 2px;
+}
+
+.issue-pill-badge {
+  font-size: 10px;
+  font-weight: 750;
+  padding: 1px 6px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.issue-pill-badge.frame-pill {
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+}
+
+.issue-pill-badge.track-pill {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
 }

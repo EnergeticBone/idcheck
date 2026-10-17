@@ -28,6 +28,7 @@ from studio.backend.auth import require
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = ROOT.parent
 FRAME_CACHE_DIR = ROOT / "storage" / "cvat_frames"
 FRAME_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 META_FILE = ROOT / "storage" / "cvat_job_meta.json"
@@ -55,13 +56,18 @@ def _save_job_meta(meta):
     tmp.replace(META_FILE)
 
 
-def _get_active_client():
+def _get_active_client(org_slug=None):
     now = time.time()
     with LOCK:
         if _CLIENT_CACHE["client"] is not None and (now - _CLIENT_CACHE["timestamp"]) < CACHE_TTL:
-            return _CLIENT_CACHE["client"]
+            client = _CLIENT_CACHE["client"]
+            if org_slug is not None:
+                client.organization_slug = org_slug
+            return client
         try:
             client = get_client()
+            if org_slug is not None:
+                client.organization_slug = org_slug
             _CLIENT_CACHE["client"] = client
             _CLIENT_CACHE["timestamp"] = now
             return client
@@ -70,9 +76,45 @@ def _get_active_client():
             raise ConnectionError(f"Không thể kết nối đến máy chủ CVAT: {e}")
 
 
-def list_jobs(actor):
+def compute_job_role(job_dict, actor):
+    """
+    Xác định vai trò của người dùng đối với một Job cụ thể (Job-level Role):
+    - 'admin': Quyền quản trị toàn hệ thống (Lead / Admin).
+    - 'annotator': Người làm nhãn job này (khi stage='annotation', hoặc là tác giả nhãn).
+    - 'reviewer': Người được giao review job này, hoặc đồng nghiệp review chéo khi job ở stage='validation'/'acceptance'.
+    - 'viewer': Chỉ xem thông tin tổng quan.
+    """
+    actor_role = actor.get("role", "worker")
+    if actor_role in ("admin", "owner"):
+        return "admin"
+
+    uname = (actor.get("username") or "").strip().lower()
+    assignee = (job_dict.get("assignee") or "").strip().lower()
+    annotator = (job_dict.get("annotator_name") or "").strip().lower()
+    reviewer = (job_dict.get("reviewer_name") or "").strip().lower()
+    stage = job_dict.get("stage", "annotation")
+
+    is_annotator = (annotator == uname) or (assignee == uname and stage == "annotation")
+    is_designated_reviewer = (reviewer == uname) or (assignee == uname and stage == "validation")
+
+    if stage == "annotation":
+        if is_annotator or (not assignee and not annotator):
+            return "annotator"
+        return "viewer"
+    elif stage in ("validation", "acceptance"):
+        if is_annotator:
+            return "annotator"  # Người làm nhãn xem job của mình (không được tự accept/reject)
+        elif actor_role in ("supervisor", "reviewer") or is_designated_reviewer or (not is_annotator):
+            # Supervisor / Reviewer hoặc đồng nghiệp review chéo
+            return "reviewer"
+
+    return "viewer"
+
+
+def list_jobs(actor, req=None):
     """Lấy danh sách CVAT jobs kèm thông tin project, task, assignee và lọc theo vai trò."""
-    client = _get_active_client()
+    active_org = (actor.get("active_org") if actor else None)
+    client = _get_active_client(active_org)
     meta_all = _load_job_meta()
 
     # Lấy thông tin Projects và Tasks để hiển thị tên thân thiện
@@ -119,53 +161,100 @@ def list_jobs(actor):
             "id": j.id,
             "task_id": j.task_id,
             "task_name": t_name,
+            "project_id": p_id,
             "project_name": p_name,
             "stage": getattr(j, "stage", "annotation"),
             "state": getattr(j, "state", "new"),
             "assignee": assignee_name,
             "assignee_id": assignee_id,
             "annotator_name": annotator_name,
+            "annotator_id": job_meta.get("annotator_id"),
             "reviewer_name": reviewer_name,
+            "reviewer_id": job_meta.get("reviewer_id"),
             "frame_count": frame_cnt,
             "start_frame": start_f,
             "stop_frame": stop_f,
             "cvat_url": f"{host}/tasks/{j.task_id}/jobs/{j.id}",
         })
 
+    # Thu thập danh sách dự án (Projects) trên CVAT
+    cvat_projects = []
+    seen_pids = set()
+    for j in all_jobs:
+        pid = j.get("project_id")
+        pname = j.get("project_name")
+        if pid and pid not in seen_pids:
+            seen_pids.add(pid)
+            cvat_projects.append({"id": pid, "name": pname})
+    for pid, pname in projects.items():
+        if pid not in seen_pids:
+            seen_pids.add(pid)
+            cvat_projects.append({"id": pid, "name": pname})
+    cvat_projects.sort(key=lambda p: str(p["name"]).lower())
+
     # Sắp xếp theo ID giảm dần (mới nhất lên trước)
     all_jobs.sort(key=lambda x: x["id"], reverse=True)
 
     role = actor.get("role", "annotator")
     user_name = actor.get("username", "")
+    user_name_lower = user_name.strip().lower()
 
-    # Phân quyền lọc danh sách
+    # Tính toán vai trò từng Job (Job-level Role) cho người dùng hiện tại:
+    for j in all_jobs:
+        j["role_for_job"] = compute_job_role(j, actor)
+        is_my_anno = bool(j["annotator_name"] and j["annotator_name"].strip().lower() == user_name_lower) or                      bool(j["assignee"] and j["assignee"].strip().lower() == user_name_lower and j["stage"] == "annotation")
+        j["is_my_annotation"] = is_my_anno
+        j["is_my_review"] = bool(j["stage"] in ("validation", "acceptance") and not is_my_anno and (
+            (j["reviewer_name"] and j["reviewer_name"].strip().lower() == user_name_lower) or
+            (j["assignee"] and j["assignee"].strip().lower() == user_name_lower) or
+            True  # Có thể review chéo bất kỳ job validation nào của đồng nghiệp
+        ))
+
+    req = req or {}
+    tab = req.get("tab")
     filtered_jobs = []
-    if role == "annotator":
-        # Annotator: Chỉ phụ trách các job ở giai đoạn annotation (việc được gán hoặc chưa gán; việc mới hoặc bị trả lại sửa)
-        for j in all_jobs:
-            is_assigned_to_me = j["assignee"] and j["assignee"].lower() == user_name.lower()
-            is_unassigned = not j["assignee"]
-            if (is_assigned_to_me or is_unassigned) and j["stage"] == "annotation":
-                filtered_jobs.append(j)
-    elif role == "reviewer":
-        # Reviewer: Xem tất cả jobs ở stage validation (cần QC), jobs đã trả lại (rejected), hoặc đã nghiệm thu
-        for j in all_jobs:
-            if j["stage"] in ("validation", "acceptance") or j.get("state") in ("rejected", "completed"):
-                filtered_jobs.append(j)
-        # Nếu chưa có job validation nào, trả về danh sách để reviewer thấy tổng quan
-        if not filtered_jobs:
-            filtered_jobs = all_jobs
-    else:
-        # Admin / Lead: Xem toàn bộ
+
+    if tab == "my_annotation":
+        filtered_jobs = [j for j in all_jobs if j.get("is_my_annotation")]
+    elif tab == "my_review":
+        filtered_jobs = [j for j in all_jobs if j.get("is_my_review") and j["stage"] == "validation"]
+    elif tab == "acceptance":
+        filtered_jobs = [j for j in all_jobs if j["stage"] == "acceptance"]
+    elif tab == "all":
         filtered_jobs = all_jobs
+    else:
+        # Mặc định tương thích ngược hoàn toàn
+        if role == "annotator":
+            for j in all_jobs:
+                is_assigned_to_me = j["assignee"] and j["assignee"].lower() == user_name_lower
+                is_unassigned = not j["assignee"]
+                if (is_assigned_to_me or is_unassigned) and j["stage"] == "annotation":
+                    filtered_jobs.append(j)
+        elif role == "reviewer":
+            for j in all_jobs:
+                if j["stage"] in ("validation", "acceptance") or j.get("state") in ("rejected", "completed"):
+                    filtered_jobs.append(j)
+            if not filtered_jobs:
+                filtered_jobs = all_jobs
+        else:
+            filtered_jobs = all_jobs
 
     return {
         "jobs": filtered_jobs,
+        "all_jobs": all_jobs,
         "all_count": len(all_jobs),
         "filtered_count": len(filtered_jobs),
+        "counts": {
+            "all": len(all_jobs),
+            "my_annotation": len([j for j in all_jobs if j.get("is_my_annotation")]),
+            "my_review": len([j for j in all_jobs if j.get("is_my_review") and j["stage"] == "validation"]),
+            "acceptance": len([j for j in all_jobs if j["stage"] == "acceptance"]),
+        },
         "role": role,
         "username": user_name,
+        "active_org": active_org,
         "cvat_host": host,
+        "projects": cvat_projects,
     }
 
 
@@ -198,36 +287,62 @@ def list_cvat_users(actor):
 
 
 def assign_job(req, actor):
-    """Lead phân công Job cho Annotator / Reviewer."""
+    """Lead phân công Job cho cặp đôi Annotator & Reviewer."""
     require(actor, "admin")
     job_id = int(req.get("job_id"))
-    assignee_val = req.get("assignee")  # user id or None
-    if assignee_val is not None and str(assignee_val).strip() != "":
-        assignee_val = int(assignee_val)
-    else:
-        assignee_val = None
-
     client = _get_active_client()
     job = client.jobs.retrieve(job_id)
-    updated = job.update({"assignee": assignee_val})
-    new_assignee = updated.assignee.username if updated.assignee else None
 
-    # Cập nhật metadata
     meta = _load_job_meta()
     job_meta = meta.get(str(job_id), {})
-    if updated.stage == "annotation":
-        job_meta["annotator_id"] = assignee_val
-        job_meta["annotator_name"] = new_assignee
-    elif updated.stage == "validation":
-        job_meta["reviewer_id"] = assignee_val
-        job_meta["reviewer_name"] = new_assignee
+
+    annotator_id = req.get("annotator_id")
+    reviewer_id = req.get("reviewer_id")
+    # Tương thích ngược nếu client cũ chỉ truyền 'assignee':
+    if "assignee" in req and annotator_id is None and reviewer_id is None:
+        assignee_val = req.get("assignee")
+        if job.stage == "annotation":
+            annotator_id = assignee_val
+        else:
+            reviewer_id = assignee_val
+
+    try:
+        users_by_id = {u.id: u.username for u in client.users.list()}
+    except Exception:
+        users_by_id = {}
+
+    if annotator_id is not None and str(annotator_id).strip() != "":
+        annotator_id = int(annotator_id)
+        job_meta["annotator_id"] = annotator_id
+        job_meta["annotator_name"] = users_by_id.get(annotator_id) or f"User #{annotator_id}"
+    elif "annotator_id" in req:
+        job_meta["annotator_id"] = None
+        job_meta["annotator_name"] = None
+
+    if reviewer_id is not None and str(reviewer_id).strip() != "":
+        reviewer_id = int(reviewer_id)
+        job_meta["reviewer_id"] = reviewer_id
+        job_meta["reviewer_name"] = users_by_id.get(reviewer_id) or f"User #{reviewer_id}"
+    elif "reviewer_id" in req:
+        job_meta["reviewer_id"] = None
+        job_meta["reviewer_name"] = None
+
+    # Xác định người gán trực tiếp trên CVAT hiện tại theo stage:
+    if job.stage == "annotation":
+        cvat_assignee_id = job_meta.get("annotator_id")
+    else:
+        cvat_assignee_id = job_meta.get("reviewer_id")
+
+    updated = job.update({"assignee": cvat_assignee_id})
     meta[str(job_id)] = job_meta
     _save_job_meta(meta)
 
     return {
         "ok": True,
         "job_id": job_id,
-        "assignee": new_assignee,
+        "assignee": updated.assignee.username if updated.assignee else None,
+        "annotator_name": job_meta.get("annotator_name"),
+        "reviewer_name": job_meta.get("reviewer_name"),
     }
 
 
@@ -245,10 +360,26 @@ def submit_for_validation(req, actor):
 
     # Ghi nhận thông tin annotator vào metadata trước khi chuyển giao
     meta = _load_job_meta()
+    job_info = meta.get(str(job_id), {})
+
     current_assignee_id = job.assignee.id if getattr(job, "assignee", None) else None
-    current_assignee_name = job.assignee.username if getattr(job, "assignee", None) else actor.get("username")
-    annotator_id = current_assignee_id or actor.get("id")
-    annotator_name = current_assignee_name or actor.get("username")
+    current_assignee_name = job.assignee.username if getattr(job, "assignee", None) else None
+
+    # Ưu tiên annotator_id đã lưu trong meta hoặc assignee hiện tại trên CVAT
+    annotator_id = job_info.get("annotator_id") or current_assignee_id or actor.get("id")
+    annotator_name = job_info.get("annotator_name") or current_assignee_name or actor.get("username")
+
+    # Nếu không truyền reviewer_id, dùng reviewer_id từ meta hoặc gán cho chính actor nếu actor là reviewer/supervisor
+    if not reviewer_id and job_info.get("reviewer_id"):
+        reviewer_id = job_info.get("reviewer_id")
+    if not reviewer_id and actor.get("id"):
+        if actor.get("id") != annotator_id or actor.get("role") in ("reviewer", "supervisor", "admin"):
+            reviewer_id = actor.get("id")
+
+    is_admin = actor.get("role") == "admin"
+    is_annotator = bool(actor.get("id") and annotator_id and actor.get("id") == annotator_id)
+    if reviewer_id and actor.get("id") and reviewer_id == actor.get("id") and is_annotator and not is_admin:
+        raise ValueError("Vui lòng chỉ định một đồng nghiệp khác làm Reviewer để đảm bảo tính khách quan (Annotator không tự review nhãn chính mình).")
 
     reviewer_name = None
     if reviewer_id:
@@ -259,6 +390,7 @@ def submit_for_validation(req, actor):
             pass
 
     meta[str(job_id)] = {
+        **job_info,
         "annotator_id": annotator_id,
         "annotator_name": annotator_name,
         "reviewer_id": reviewer_id,
@@ -305,6 +437,8 @@ def open_cvat_job(req, actor):
     for tid, tr in tracks.items():
         labels_set.add(tr.label)
         for fid, b in tr.boxes.items():
+            if getattr(b, "outside", False):
+                continue
             rows.append({
                 "uid": f"cvat_{tid}_{fid}",
                 "track_id": tid,
@@ -314,7 +448,7 @@ def open_cvat_job(req, actor):
                 "w": round(max(0.0, b.x2 - b.x1), 1),
                 "h": round(max(0.0, b.y2 - b.y1), 1),
                 "class_name": b.label,
-                "outside": b.outside,
+                "outside": False,
                 "occluded": b.occluded,
                 "keyframe": b.keyframe,
             })
@@ -342,12 +476,42 @@ def open_cvat_job(req, actor):
     host = getattr(client, "url", os.environ.get("CVAT_HOST", "https://cvat.trantuli.id.vn")).rstrip("/")
     assignee_name = job.assignee.username if getattr(job, "assignee", None) else None
 
+    # Lấy thông tin annotator và reviewer từ metadata
+    meta_store = _load_job_meta()
+    job_meta = meta_store.get(str(job_id), {})
+    annotator_name = job_meta.get("annotator_name")
+    if not annotator_name and getattr(job, "stage", "") == "annotation" and assignee_name:
+        annotator_name = assignee_name
+    reviewer_name = job_meta.get("reviewer_name")
+    if not reviewer_name and getattr(job, "stage", "") == "validation" and assignee_name:
+        reviewer_name = assignee_name
+
+    job_dict = {
+        "stage": getattr(job, "stage", "annotation"),
+        "state": getattr(job, "state", "new"),
+        "assignee": assignee_name,
+        "annotator_name": annotator_name,
+        "reviewer_name": reviewer_name,
+    }
+    effective_role = compute_job_role(job_dict, actor)
+    user_name_lower = (actor.get("username") or "").strip().lower()
+    is_own_job = bool(annotator_name and annotator_name.strip().lower() == user_name_lower)
+    is_admin = actor.get("role") == "admin"
+    can_review = bool((effective_role in ("reviewer", "admin")) and not (is_own_job and not is_admin))
+    can_edit_boxes = bool((effective_role in ("annotator", "admin")) and getattr(job, "stage", "") == "annotation")
+
     return {
         "job_id": job_id,
         "task_id": job.task_id,
         "stage": getattr(job, "stage", "annotation"),
         "state": getattr(job, "state", "new"),
         "assignee": assignee_name,
+        "annotator_name": annotator_name,
+        "reviewer_name": reviewer_name,
+        "effective_role": effective_role,
+        "can_review": can_review,
+        "can_edit_boxes": can_edit_boxes,
+        "is_own_job": is_own_job,
         "boxes": rows,
         "issues": scan_res["issues"],
         "counts": scan_res["counts"],
@@ -361,15 +525,35 @@ def open_cvat_job(req, actor):
         "cvat_media_url_pattern": f"/api/cvat/frame/{job_id}/{{frame_id}}",
         "labels": sorted(labels_set) or ["Car"],
         "cvat_url": f"{host}/tasks/{job.task_id}/jobs/{job_id}",
+        "config": config_name or "config_project_3.yaml",
     }
 
 
 def reject_and_raise_issues(req, actor):
     """Reviewer từ chối Job, tạo issues trên CVAT tại đúng frame/box và chuyển stage về annotation."""
-    require(actor, "reviewer", "admin")
     job_id = int(req.get("job_id"))
     client = _get_active_client()
     job = client.jobs.retrieve(job_id)
+
+    meta = _load_job_meta()
+    job_meta = meta.get(str(job_id), {})
+    annotator_name = job_meta.get("annotator_name")
+    user_name = actor.get("username", "")
+    is_admin = actor.get("role") == "admin"
+
+    # Chống tự từ chối job của chính mình:
+    if not is_admin and annotator_name and annotator_name.strip().lower() == user_name.strip().lower():
+        raise PermissionError("Không thể tự từ chối (Reject) job do chính mình làm nhãn. Hãy để đồng nghiệp review chéo.")
+
+    job_dict = {
+        "stage": getattr(job, "stage", "annotation"),
+        "assignee": job.assignee.username if getattr(job, "assignee", None) else None,
+        "annotator_name": annotator_name,
+        "reviewer_name": job_meta.get("reviewer_name"),
+    }
+    role_for_job = compute_job_role(job_dict, actor)
+    if role_for_job not in ("reviewer", "admin") and not is_admin:
+        raise PermissionError("Bạn không có quyền Reviewer đối với Job này.")
 
     # Lấy tracks hiện tại để xác định vị trí box cho issue
     tracks, _ = load_job_tracks(client, job_id, interpolate=True)
@@ -429,10 +613,29 @@ def reject_and_raise_issues(req, actor):
 
 def accept_job(req, actor):
     """Reviewer chấp thuận hoàn thành Job -> stage 'acceptance', state 'completed'."""
-    require(actor, "reviewer", "admin")
     job_id = int(req.get("job_id"))
     client = _get_active_client()
     job = client.jobs.retrieve(job_id)
+
+    meta = _load_job_meta()
+    job_meta = meta.get(str(job_id), {})
+    annotator_name = job_meta.get("annotator_name")
+    user_name = actor.get("username", "")
+    is_admin = actor.get("role") == "admin"
+
+    # Chống tự duyệt (Anti self-approval):
+    if not is_admin and annotator_name and annotator_name.strip().lower() == user_name.strip().lower():
+        raise PermissionError("Không thể tự nghiệm thu (Accept) job do chính mình làm nhãn. Hãy để đồng nghiệp review chéo.")
+
+    job_dict = {
+        "stage": getattr(job, "stage", "annotation"),
+        "assignee": job.assignee.username if getattr(job, "assignee", None) else None,
+        "annotator_name": annotator_name,
+        "reviewer_name": job_meta.get("reviewer_name"),
+    }
+    role_for_job = compute_job_role(job_dict, actor)
+    if role_for_job not in ("reviewer", "admin") and not is_admin:
+        raise PermissionError("Bạn không có quyền Reviewer đối với Job này.")
 
     updated = job.update({"stage": "acceptance", "state": "completed"})
     return {
@@ -608,5 +811,238 @@ def push_job_annotations(req, actor):
         "keyframes": sum(len(t['shapes']) for t in payload['tracks']),
         "backup_file": backup_path.name,
         "message": f"Đã đẩy thành công {len(payload['tracks'])} tracks (được nén keyframe) về Job #{job_id}. Bản gốc đã sao lưu tại {backup_path.name}."
+    }
+
+
+
+def list_organizations(actor):
+    """Lấy danh sách các tổ chức (Organizations) mà người dùng có quyền truy cập trên CVAT."""
+    client = _get_active_client()
+    uname = actor.get("username", "")
+    is_admin = actor.get("role") in ("admin", "owner") or actor.get("is_staff", False)
+
+    from cvat_sdk.api_client.api import organizations_api, memberships_api
+    all_orgs = []
+    try:
+        o_api = organizations_api.OrganizationsApi(client.api_client)
+        o_res, _ = o_api.list()
+        all_orgs = o_res.results or []
+    except Exception as e:
+        logger.warning("Could not list organizations: %s", e)
+
+    m_dict = {}
+    try:
+        m_api = memberships_api.MembershipsApi(client.api_client)
+        m_res, _ = m_api.list(user=uname)
+        for m in (m_res.results or []):
+            m_dict[m.organization] = m.role
+    except Exception as e:
+        logger.warning("Could not list user memberships: %s", e)
+
+    orgs_out = []
+    for o in all_orgs:
+        if is_admin or o.id in m_dict:
+            orgs_out.append({
+                "id": o.id,
+                "slug": o.slug,
+                "name": o.name or o.slug,
+                "role": m_dict.get(o.id, "owner" if is_admin else "worker"),
+            })
+
+    # Tùy chọn Cá nhân (Personal Workspace)
+    orgs_out.append({
+        "id": 0,
+        "slug": "",
+        "name": "Cá nhân (Personal Workspace)",
+        "role": "owner" if is_admin else "worker",
+    })
+
+    active_org = actor.get("active_org")
+    if active_org is None:
+        active_org = orgs_out[0]["slug"] if orgs_out else ""
+
+    return {
+        "organizations": orgs_out,
+        "active_org": active_org,
+    }
+
+
+def set_active_organization(req, actor):
+    """Chuyển đổi Organization đang làm việc và cập nhật vai trò của người dùng trong Organization đó."""
+    from studio.backend import auth
+    org_slug = (req.get("org_slug") or "").strip()
+    uname = actor.get("username", "")
+    token = actor.get("token")
+
+    client = _get_active_client(org_slug)
+
+    new_role = "worker"
+    if actor.get("is_staff") or actor.get("role") == "admin":
+        new_role = "admin"
+    elif org_slug:
+        try:
+            from cvat_sdk.api_client.api import memberships_api, organizations_api
+            m_api = memberships_api.MembershipsApi(client.api_client)
+            m_res, _ = m_api.list(user=uname)
+            o_api = organizations_api.OrganizationsApi(client.api_client)
+            for m in (m_res.results or []):
+                try:
+                    o_obj, _ = o_api.retrieve(m.organization)
+                    if o_obj.slug == org_slug:
+                        if m.role in ("owner", "maintainer"):
+                            new_role = "admin"
+                        elif m.role == "supervisor":
+                            new_role = "supervisor"
+                        else:
+                            new_role = "worker"
+                        break
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("Error checking role in org %s: %s", org_slug, e)
+    else:
+        new_role = "admin" if actor.get("is_staff") else "worker"
+
+    if token:
+        auth.update_session_org_and_role(token, org_slug, new_role)
+
+    return {
+        "ok": True,
+        "active_org": org_slug,
+        "role": new_role,
+        "message": f"Đã chuyển sang tổ chức: {org_slug or 'Cá nhân (Personal)'} (Vai trò: {new_role.upper()})"
+    }
+
+
+def list_configs():
+    """Liệt kê danh sách các file cấu hình YAML có sẵn trong repository."""
+    configs = [p.name for p in sorted(REPO_ROOT.glob("config_*.yaml"))]
+    if "config_base.yaml" not in configs:
+        configs.insert(0, "config_base.yaml")
+    return {"configs": configs}
+
+
+def calibrate_from_jobs(req, actor):
+    """
+    Tự động hiệu chỉnh ngưỡng (Auto-Calibrate) từ các Job đã nghiệm thu (stage='acceptance').
+    Quy trình:
+    1. Tải tracks sạch từ các Job mẫu trên CVAT.
+    2. Chèn lỗi nhân tạo (jump, swap, gap, merge) để tạo tập test.
+    3. Grid-search F1-score để tìm ngưỡng tối ưu (hạn chế tối đa báo oan).
+    4. Lưu file cấu hình config_project_<id>.yaml và trả về thông số tối ưu.
+    """
+    require(actor, "supervisor", "reviewer", "admin")
+    from tools.tune.calibrate_project import (
+        tune_max_speed, tune_switch_params, tune_merge_params
+    )
+    from adapters.cvat_api import load_job_tracks
+    from core.inject import inject_many
+    import copy
+    import yaml
+
+    client = _get_active_client(actor.get("active_org"))
+    job_ids = req.get("job_ids") or []
+    if not job_ids:
+        # Nếu không chỉ định, lấy toàn bộ jobs ở stage acceptance
+        jobs_res = list_jobs(actor)
+        job_ids = [j["id"] for j in jobs_res.get("all_jobs", []) if j.get("stage") == "acceptance"]
+
+    if not job_ids:
+        raise ValueError("Không tìm thấy Job nào ở trạng thái 'acceptance' (Đã nghiệm thu) để làm mẫu Ground Truth.")
+
+    project_id = req.get("project_id")
+    project_name = req.get("project_name") or f"Project #{project_id or 'Auto'}"
+    fps = float(req.get("fps") or 5.0)
+
+    out_name = (req.get("out_name") or f"config_project_{project_id or 'tuned'}.yaml").strip()
+    if not out_name.endswith(".yaml") and not out_name.endswith(".yml"):
+        out_name += ".yaml"
+
+    base_config_path = req.get("base_config")
+    if not base_config_path:
+        if project_id and (REPO_ROOT / f"config_project_{project_id}.yaml").is_file():
+            base_file = REPO_ROOT / f"config_project_{project_id}.yaml"
+        elif (REPO_ROOT / "config_project_3.yaml").is_file():
+            base_file = REPO_ROOT / "config_project_3.yaml"
+        else:
+            base_file = REPO_ROOT / "config_base.yaml"
+    else:
+        base_file = REPO_ROOT / base_config_path
+        if not base_file.is_file():
+            base_file = REPO_ROOT / "config_project_3.yaml" if (REPO_ROOT / "config_project_3.yaml").is_file() else REPO_ROOT / "config_base.yaml"
+
+    # 1. Tải tracks từ CVAT
+    clean_data = {}
+    for jid in job_ids:
+        tracks, _ = load_job_tracks(client, jid, interpolate=True)
+        if tracks:
+            clean_data[jid] = tracks
+
+    if not clean_data:
+        raise ValueError("Không tải được track nào từ danh sách Job đã chọn.")
+
+    total_tracks = sum(len(tr) for tr in clean_data.values())
+
+    # 2. Sinh tập dữ liệu lỗi nhân tạo tổng hợp
+    dirty_data = {}
+    k = fps / 30.0
+    for jid, clean in clean_data.items():
+        dirty, truths = inject_many(
+            clean,
+            n_per_type=8,
+            seed=jid,
+            drop_range=(max(1, round(2 * k)), max(2, round(8 * k))),
+            gap_range=(max(1, round(2 * k)), max(2, round(6 * k))),
+            jump_range=(1.5, 4.0),
+        )
+        dirty_data[jid] = (dirty, truths)
+
+    # 3. Đọc cấu hình nền
+    with open(base_file, "r", encoding="utf-8") as f:
+        base_cfg = yaml.safe_load(f) or {}
+
+    # 4. Chạy tối ưu hóa ngưỡng (Grid search F1-score)
+    opt_speed = tune_max_speed(clean_data, dirty_data, base_cfg, fps)
+    opt_sep, opt_ratio = tune_switch_params(clean_data, dirty_data, base_cfg, fps)
+    opt_cost, opt_gap_s = tune_merge_params(clean_data, dirty_data, base_cfg, fps)
+
+    # 5. Lưu file cấu hình mới
+    tuned_cfg = copy.deepcopy(base_cfg)
+    tuned_cfg.setdefault("default", {})
+    tuned_cfg["default"]["max_speed"] = opt_speed
+    tuned_cfg["default"]["swap_min_sep"] = opt_sep
+    tuned_cfg["default"]["swap_cross_ratio"] = opt_ratio
+    tuned_cfg["default"]["merge_max_cost"] = opt_cost
+    tuned_cfg["default"]["max_merge_gap_s"] = opt_gap_s
+    # Bảo đảm min_missing_gap_s không nhỏ hơn 2 frame để tránh báo oan xe đi bình thường
+    min_gap_thresh = round(2.0 / fps + 0.05, 2)
+    if tuned_cfg["default"].get("min_missing_gap_s", 0) < min_gap_thresh:
+        tuned_cfg["default"]["min_missing_gap_s"] = min_gap_thresh
+    if "skip_occluded_gap" not in tuned_cfg["default"] or not tuned_cfg["default"]["skip_occluded_gap"]:
+        tuned_cfg["default"]["skip_occluded_gap"] = True
+
+    for cls_name in ("car", "truck", "other vehicle"):
+        tuned_cfg.setdefault("classes", {}).setdefault(cls_name, {})
+        tuned_cfg["classes"][cls_name]["max_speed"] = opt_speed
+
+    out_file = REPO_ROOT / out_name
+    with open(out_file, "w", encoding="utf-8") as f:
+        yaml.dump(tuned_cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+    return {
+        "ok": True,
+        "config_file": out_name,
+        "parameters": {
+            "max_speed": opt_speed,
+            "swap_min_sep": opt_sep,
+            "swap_cross_ratio": opt_ratio,
+            "merge_max_cost": opt_cost,
+            "max_merge_gap_s": opt_gap_s,
+        },
+        "jobs_used": job_ids,
+        "total_tracks": total_tracks,
+        "fps": fps,
+        "project_name": project_name,
+        "message": f"Đã tối ưu hóa ngưỡng và lưu cấu hình '{out_name}' thành công từ {len(job_ids)} Job mẫu ({total_tracks} tracks)!"
     }
 

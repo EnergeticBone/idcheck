@@ -1,7 +1,7 @@
 'use strict';
 const el=id=>document.getElementById(id);
 const htmlEscape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const S={boxes:[],meta:{},session:null,issues:[],decisions:{},selectedUid:null,selectedIssue:null,
+const S={boxes:[],meta:{},session:null,issues:[],decisions:{},selectedUid:null,selectedTrackId:null,selectedIssue:null,
          frame:1,frameMap:new Map(),undo:[],redo:[],imageURLs:new Map(),images:new Map(),videoURL:null,
          mediaFiles:[],mediaNames:new Map(),mediaToken:null,mediaMode:'none',
          videoToken:null,videoMeta:null,videoError:'',projectId:null,projectName:null,
@@ -16,7 +16,7 @@ async function api(path,body={}){
  return data;
 }
 function toast(text,error=false){const v=el('toast');v.textContent=text;v.className='toast show'+(error?' error':'');clearTimeout(toastTimer);toastTimer=setTimeout(()=>v.className='toast',4400)}
-function setBusy(v){busy=v;el('btnScan').disabled=v||!S.boxes.length;el('btnExport').disabled=v||!S.boxes.length||!canEdit();el('btnDemo').disabled=v||!canEdit();el('btnSaveSession').disabled=v||!S.boxes.length||!canEdit()}
+function setBusy(v){busy=v;if(el('btnScan'))el('btnScan').disabled=v||!S.boxes.length;if(el('btnExport'))el('btnExport').disabled=v||!S.boxes.length||!canEdit();if(el('btnDemo'))el('btnDemo').disabled=v||!canEdit();if(el('btnSaveSession'))el('btnSaveSession').disabled=v||!S.boxes.length||!canEdit()}
 function deepBoxes(){return S.boxes.map(b=>({...b}))}
 function undoButtons(){const edit=canEdit();if(el('btnUndo'))el('btnUndo').disabled=!edit||!S.undo.length;if(el('btnRedo'))el('btnRedo').disabled=!edit||!S.redo.length}
 function updateZoomBadge(){const z=el('zoomPercent');if(z)z.textContent=`${Math.round(S.zoom*100)}%`}
@@ -59,21 +59,26 @@ function zoomToBox(b, animate=true){
 function checkpoint(){if(!canEdit())return;S.undo.push(deepBoxes());if(S.undo.length>20)S.undo.shift();S.redo=[];undoButtons()}
 function indexBoxes(){
  S.frameMap=new Map();
+ S.trackMap=new Map();
  let counter=1;
  for(const b of S.boxes){
+  if(b.outside) continue;
   if(!b.uid) b.uid=`b_${b.frame_id}_${b.track_id}_${counter++}`;
   if(!S.frameMap.has(b.frame_id))S.frameMap.set(b.frame_id,[]);
   S.frameMap.get(b.frame_id).push(b);
+  if(!S.trackMap.has(b.track_id))S.trackMap.set(b.track_id,[]);
+  S.trackMap.get(b.track_id).push(b);
  }
 }
 function resetDecisions(){S.decisions=Object.fromEntries(Object.entries(S.tasks).map(([id,t])=>[id,t.status]));S.selectedIssue=null}
 function readMeta(){const width=Number(el('imageWidth').value),height=Number(el('imageHeight').value),fpsVal=Number(el('fps').value);
- return {...S.meta,width:width>0?width:null,height:height>0?height:null,fps:fpsVal>0?fpsVal:(S.meta.fps||5.0)}}
+ const cfgVal = S.activeConfig || S.meta?.config || el('cvatConfigSelect')?.value || 'config_project_3.yaml';
+ return {...S.meta,width:width>0?width:null,height:height>0?height:null,fps:fpsVal>0?fpsVal:(S.meta.fps||5.0),config:cfgVal}}
 function setMetadata(data,name){
  clearMedia(); // Prevent previous dataset/demo media from leaking into a newly imported XML/MOT.
- S.boxes=data.boxes||[];S.meta={format:data.format,frame_base:data.frame_base??0,mode:data.mode||'video',
+ S.boxes=(data.boxes||[]).filter(b=>!b.outside);S.meta={format:data.format,frame_base:data.frame_base??0,mode:data.mode||'video',
  width:data.width||null,height:data.height||null,total_frames:data.total_frames||null,labels:data.labels||[],task_name:data.task_name||''};
- S.session=(S.projectId && S.session && !restoringProject)?S.session:data.session;S.sourceName=data.source_name||name;S.undo=[];S.redo=[];S.selectedUid=null;S.issues=[];if(!S.projectId)S.tasks={};resetDecisions();S.lastScan=null;
+ S.session=(S.projectId && S.session && !restoringProject)?S.session:data.session;S.sourceName=data.source_name||name;S.undo=[];S.redo=[];S.selectedUid=null;S.selectedTrackId=null;S.issues=[];if(!S.projectId)S.tasks={};resetDecisions();S.lastScan=null;
  if(S.meta.width)el('imageWidth').value=S.meta.width;
  if(S.meta.height)el('imageHeight').value=S.meta.height;
  if(!S.meta.width)el('imageWidth').value='';if(!S.meta.height)el('imageHeight').value='';
@@ -87,7 +92,15 @@ function maxFrame(){const arr=S.boxes.map(b=>b.frame_id);return arr.length?Math.
 function minFrame(){const arr=S.boxes.map(b=>b.frame_id);return arr.length?Math.min(...arr):S.frame}
 function timelineBounds(){const start=S.meta.frame_base??minFrame();return {start:Math.min(start,minFrame()),end:Math.max(maxFrame(),start+(S.meta.total_frames||0)-1)}}
 function setFrame(f){const b=timelineBounds();S.frame=Math.max(b.start,Math.min(b.end,Number(f)));el('timeline').value=S.frame;
- el('frameLabel').textContent=`Frame ${S.frame}`;el('frameRange').textContent=`${b.start} – ${b.end}`;selectBox(null);seekVideo();updateMediaStatus();draw();renderFrameBoxes();queueProjectSave()}
+ el('frameLabel').textContent=`Frame ${S.frame}`;el('frameRange').textContent=`${b.start} – ${b.end}`;
+ let targetUid=null;
+ if(S.selectedTrackId!==null&&S.selectedTrackId!==undefined){
+  const frameBoxes=S.frameMap?.get(S.frame)||[];
+  const match=frameBoxes.find(x=>x.track_id===S.selectedTrackId);
+  if(match)targetUid=match.uid;
+ }
+ selectBox(targetUid,{keepTrack:S.selectedTrackId!==null&&S.selectedTrackId!==undefined});
+ seekVideo();updateMediaStatus();draw();renderFrameBoxes();queueProjectSave()}
 let playInterval=null;
 function togglePlayback(){
  if(playInterval){
@@ -171,7 +184,7 @@ function metrics(){const tracks=new Set(S.boxes.map(b=>b.track_id));el('metricBo
 function refreshAll(){metrics();refreshTimeline();setFrame(S.frame);renderIssues();setBusy(false)}
 async function loadFile(file){try{
  setBusy(true);
- if(role()==='reviewer'&&S.projectId){
+ if(canReview()&&S.projectId){
    throw Error('Reviewer không thể thay annotation trong Project đang mở. Hãy mở Project để QC hoặc vào workspace không gắn Project để xem file tạm.');
  }
  let data;
@@ -193,12 +206,12 @@ async function loadFile(file){try{
   mapVideoFrames();queueProjectSave();
   toast('Đã ghép XML với video đang mở; kiểm tra Video start / Step trước khi sửa.');
  }else toast(`Đã đọc ${S.boxes.length} box; đang quét...`);
- if(role()==='reviewer')toast('Reviewer đã nhập dữ liệu ở chế độ chỉ xem/QC. Annotator cần đưa dataset vào Project trước khi QC được lưu và chuyển sửa.');
+ if(canReview()&&!canEdit())toast('Reviewer đã nhập dữ liệu ở chế độ chỉ xem/QC. Annotator cần đưa dataset vào Project trước khi QC được lưu và chuyển sửa.');
  await scan();
  }catch(e){toast(e.message,true)}finally{setBusy(false)}}
-async function scan(){if(!S.boxes.length)return;try{setBusy(true);const r=await api('validate',{boxes:S.boxes,...readMeta()});S.issues=r.issues;S.lastScan=r;
- // A reviewed issue is linked to its still-identical stable issue id. New issues remain pending.
- renderIssues();metrics();refreshTimeline();draw();toast(`Hoàn tất: ${r.count} cảnh báo, ${r.stats.tracks} track`)}catch(e){toast(e.message,true)}finally{setBusy(false)}}
+async function scan(){if(!S.boxes.length)return;try{setBusy(true);const meta=readMeta();const r=await api('validate',{boxes:S.boxes,...meta});S.issues=r.issues;S.lastScan=r;
+ if(el('cvatBannerSubtitle')&&S.cvatJob){el('cvatBannerSubtitle').textContent=`Stage: ${(S.cvatJob.stage||'').toUpperCase()} (${S.cvatJob.state||''}) · Assignee: ${S.cvatJob.assignee||'Chưa gán'} · ${r.count} issues · ⚙ ${meta.config}`;}
+ renderIssues();metrics();refreshTimeline();draw();toast(`Hoàn tất: ${r.count} cảnh báo (${meta.config}), ${r.stats.tracks} track`)}catch(e){toast(e.message,true)}finally{setBusy(false)}}
 async function loadDemo(){try{setBusy(true);const data=await api('demo');setMetadata(data,'Demo (dữ liệu giả lập)');await scan()}catch(e){toast(e.message,true)}finally{setBusy(false)}}
 function localVideoFrame(){return Math.max(0,S.frame-(S.meta.frame_base??0))}
 function seekVideo(){/* v2.2: decoded source-index frames fetched via FFmpeg; no inaccurate browser seek */}
@@ -359,24 +372,58 @@ function draw(){const {ctx,c,w,h,sx,sy}=canvasParams();ctx.fillStyle='#152139';c
  const labelScale=Math.min(1.4,Math.max(0.6,1/S.zoom));
  const fontSize=Math.round(12*labelScale);
  ctx.textBaseline='top';ctx.font=`bold ${fontSize}px system-ui`;
+ if(S.selectedTrackId!==null&&S.selectedTrackId!==undefined&&S.trackMap?.has(S.selectedTrackId)){
+  const trackBoxes=S.trackMap.get(S.selectedTrackId)||[];
+  if(trackBoxes.length>1){
+   const nearby=trackBoxes.filter(tb=>Math.abs(tb.frame_id-S.frame)<=25).sort((a,b)=>a.frame_id-b.frame_id);
+   if(nearby.length>1){
+    ctx.save();
+    ctx.lineWidth=Math.max(1, 1.8/S.zoom);
+    ctx.setLineDash([4/S.zoom, 3/S.zoom]);
+    ctx.strokeStyle='rgba(56, 189, 248, 0.45)';
+    ctx.beginPath();
+    let started=false;
+    for(const tb of nearby){
+     const cx=(tb.x+tb.w/2)*sx, cy=(tb.y+tb.h/2)*sy;
+     if(!started){ ctx.moveTo(cx,cy); started=true; }
+     else { ctx.lineTo(cx,cy); }
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for(const tb of nearby){
+     if(tb.frame_id===S.frame)continue;
+     const cx=(tb.x+tb.w/2)*sx, cy=(tb.y+tb.h/2)*sy;
+     const r=Math.max(2, 3/S.zoom);
+     ctx.beginPath();
+     ctx.arc(cx,cy,r,0,Math.PI*2);
+     ctx.fillStyle=tb.frame_id<S.frame?'rgba(56, 189, 248, 0.65)':'rgba(192, 132, 252, 0.65)';
+     ctx.fill();
+    }
+    ctx.restore();
+   }
+  }
+ }
  const unselected=[], selectedArr=[];
  for(const b of rows){
-  if(S.selectedUid && b.uid===S.selectedUid) selectedArr.push(b);
+  if((S.selectedUid && b.uid===S.selectedUid) || (S.selectedTrackId!==null && b.track_id===S.selectedTrackId)) selectedArr.push(b);
   else unselected.push(b);
  }
  const drawList=[...unselected, ...selectedArr];
- for(const b of drawList){const selected=Boolean(S.selectedUid && b.uid && b.uid===S.selectedUid), col=selected?'#fff000':colors(b.track_id);
- const x=b.x*sx,y=b.y*sy,bw=b.w*sx,bh=b.h*sy;
- const strokeW=Math.max(1,(selected?3:1.8)/S.zoom);
- ctx.strokeStyle=col;ctx.lineWidth=strokeW;ctx.strokeRect(x,y,bw,bh);
- const text=`#${b.track_id} · ${b.class_name}`;const tw=ctx.measureText(text).width+(8*labelScale);
- const tagH=18*labelScale;
- if(selected){ctx.shadowColor='rgba(0,0,0,0.55)';ctx.shadowBlur=6/S.zoom;ctx.shadowOffsetY=2/S.zoom}
- ctx.fillStyle=selected?'#edce00':'#152139db';ctx.fillRect(x,Math.max(0,y-tagH-1),tw,tagH);
- if(selected){ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0}
- ctx.fillStyle=selected?'#182033':col;ctx.fillText(text,x+(4*labelScale),Math.max(0,y-tagH));
- if(selected){const handleSize=Math.max(4,8/S.zoom);ctx.fillStyle='#fff000';ctx.fillRect(x+bw-handleSize/2,y+bh-handleSize/2,handleSize,handleSize)}
- }
+ for(const b of drawList){
+    const selected=Boolean((S.selectedUid && b.uid && b.uid===S.selectedUid) || (S.selectedTrackId!==null && b.track_id===S.selectedTrackId));
+    const hovered=Boolean(!selected && S.hoveredUid && b.uid && b.uid===S.hoveredUid);
+    const col=selected?'#fff000':colors(b.track_id);
+    const x=b.x*sx,y=b.y*sy,bw=b.w*sx,bh=b.h*sy;
+    const strokeW=Math.max(1,(selected?3:hovered?2.6:1.8)/S.zoom);
+    ctx.strokeStyle=hovered?'#ffffff':col;ctx.lineWidth=strokeW;ctx.strokeRect(x,y,bw,bh);
+    const text=`#${b.track_id} · ${b.class_name}`;const tw=ctx.measureText(text).width+(8*labelScale);
+    const tagH=18*labelScale;
+    if(selected){ctx.shadowColor='rgba(0,0,0,0.55)';ctx.shadowBlur=6/S.zoom;ctx.shadowOffsetY=2/S.zoom}
+    ctx.fillStyle=selected?'#edce00':hovered?'#243756':'#152139db';ctx.fillRect(x,Math.max(0,y-tagH-1),tw,tagH);
+    if(selected){ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0}
+    ctx.fillStyle=selected?'#182033':col;ctx.fillText(text,x+(4*labelScale),Math.max(0,y-tagH));
+    if(selected){const handleSize=Math.max(4,8/S.zoom);ctx.fillStyle='#fff000';ctx.fillRect(x+bw-handleSize/2,y+bh-handleSize/2,handleSize,handleSize)}
+  }
  if(S.drag?.type==='create'&&S.drag.preview){const [x,y,bw,bh]=S.drag.preview;ctx.setLineDash([7/S.zoom,5/S.zoom]);ctx.strokeStyle='#66ffcb';ctx.lineWidth=2/S.zoom;ctx.strokeRect(x*sx,y*sy,bw*sx,bh*sy);ctx.setLineDash([])}
  ctx.restore();
  el('canvasMessage').hidden=!!S.boxes.length||!!S.videoToken||!!S.mediaFiles.length;
@@ -396,18 +443,66 @@ function hit(p){const rawRows=S.frameMap.get(S.frame)||[];const m=canvasParams()
  const rows=selBox?[selBox,...otherRows]:otherRows;
  for(const b of rows){if(Math.abs(p.x-(b.x+b.w))<corner&&Math.abs(p.y-(b.y+b.h))<corner)return {box:b,type:'resize'};
  if(p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h)return {box:b,type:'move'}}return null}
-function selectBox(uid){S.selectedUid=uid||null;const b=S.selectedUid?S.boxes.find(x=>x.uid===S.selectedUid):null;
+function selectBox(uid, opts={}){
+ const keepTrack=opts.keepTrack??false;
+ S.selectedUid=uid||null;
+ const b=S.selectedUid?S.boxes.find(x=>x.uid===S.selectedUid):null;
+ if(b){
+  S.selectedTrackId=b.track_id;
+ } else if(!keepTrack){
+  S.selectedTrackId=null;
+ }
  const edit=canEdit();
  for(const [id,k] of [['fieldUid','uid'],['fieldTrack','track_id'],['fieldClass','class_name'],['fieldX','x'],['fieldY','y'],['fieldW','w'],['fieldH','h']]){
-   el(id).value=(b&&b[k]!==undefined)?b[k]:'';
-   el(id).disabled=!edit||id==='fieldUid';
+   if(el(id)){
+     el(id).value=(b&&b[k]!==undefined)?b[k]:'';
+     el(id).disabled=!edit||id==='fieldUid'||!b;
+   }
  }
  for(const id of ['btnSaveBox','btnDeleteBox','btnStitch','btnSwap']){
-   el(id).disabled=!b||!edit;
-   el(id).hidden=!edit;
+   if(el(id)){
+     el(id).disabled=!b||!edit;
+     el(id).hidden=!edit;
+   }
+ }
+ const hasTrack=(b!==null)||(S.selectedTrackId!==null&&S.selectedTrackId!==undefined);
+ if(el('btnDeselectBox')){
+   el('btnDeselectBox').hidden=!hasTrack;
+ }
+ if(el('boxBarTag')){
+   if(b){
+     const trackBoxes=S.trackMap?.get(b.track_id)||[];
+     const fList=trackBoxes.map(x=>x.frame_id);
+     const rangeText=fList.length?` · F${Math.min(...fList)}–${Math.max(...fList)}`:'';
+     el('boxBarTag').textContent=`Track #${b.track_id} · ${b.class_name||'Object'}${rangeText}`;
+     el('boxBarTag').className='box-bar-tag active';
+     const col=colors(b.track_id);
+     el('boxBarTag').style.borderColor=col;
+     el('boxBarTag').style.color='#fff';
+   } else if(S.selectedTrackId!==null&&S.selectedTrackId!==undefined){
+     const trackBoxes=S.trackMap?.get(S.selectedTrackId)||[];
+     const fList=trackBoxes.map(x=>x.frame_id);
+     const rangeText=fList.length?` (Tồn tại ở F${Math.min(...fList)}–${Math.max(...fList)})`:'';
+     el('boxBarTag').textContent=`Track #${S.selectedTrackId} · Không có ở Frame ${S.frame}${rangeText}`;
+     el('boxBarTag').className='box-bar-tag';
+     const col=colors(S.selectedTrackId);
+     el('boxBarTag').style.borderColor=col;
+     el('boxBarTag').style.color='#cbd5e1';
+   } else {
+     el('boxBarTag').textContent='Chưa chọn đối tượng';
+     el('boxBarTag').className='box-bar-tag';
+     el('boxBarTag').style.borderColor='';
+     el('boxBarTag').style.color='';
+   }
  }
  if(el('boxInspectorHint')){
-   el('boxInspectorHint').textContent=edit?'Thay đổi được kiểm tra xung đột trước khi lưu':'Chế độ Reviewer: Chỉ xem thuộc tính box, không chỉnh sửa trực tiếp';
+   if(b){
+     el('boxInspectorHint').textContent=edit?'Thay đổi được kiểm tra xung đột trước khi lưu':'Chế độ Reviewer: Chỉ xem';
+   } else if(S.selectedTrackId!==null&&S.selectedTrackId!==undefined){
+     el('boxInspectorHint').textContent=`Đang theo dõi Track #${S.selectedTrackId} (Chuyển frame sẽ tự bắt box)`;
+   } else {
+     el('boxInspectorHint').textContent='Nhấp box trên frame để kiểm tra';
+   }
  }
  draw();renderFrameBoxes()}
 async function doFix(action,data,success='Đã cập nhật annotation'){if(!canEdit())return toast('Chỉ Annotator được sửa annotation.',true);try{setBusy(true);const r=await api('fix',{boxes:S.boxes,action,data,session:S.session});checkpoint();S.boxes=r.boxes;
@@ -429,10 +524,10 @@ function issueFix(i){const action=i.suggestion,p=i.fix_data||{};
  if(action==='interpolate_gap')data={track_id:p.track_id,from_frame:p.from_frame,to_frame:p.to_frame};
  addTextDialog('Xác nhận sửa nhãn',`Thao tác: ${safeAction[action]||action}.\n${i.message}\nHệ thống kiểm tra xung đột trước khi áp dụng.`,()=>doFix(action,data))}
 const statusText={needs_fix:'Cần Annotator sửa',fixed:'Đã sửa · Chờ Reviewer QC',
- verified:'Reviewer đã xác nhận',false_positive:'Không phải lỗi (Reviewer)'};
+ verified:'Reviewer đã xác nhận',false_positive:'Đã đánh dấu: Không phải lỗi'};
 function handoffDialog(i,status){
  if(!S.projectId)return toast('Hãy tạo hoặc mở Project trước khi gửi yêu cầu QC.',true);
- const isReviewer=role()==='reviewer', allowed=(isReviewer&&status!=='fixed')||(canEdit()&&status==='fixed');
+ const isReviewer=canReview(), allowed=(isReviewer&&status!=='fixed')||(canEdit()&&status==='fixed');
  if(!allowed)return toast('Vai trò hiện tại không có quyền đổi trạng thái này.',true);
  const heading={needs_fix:'Gửi lỗi về Annotator',fixed:'Annotator báo đã sửa',
  verified:'Reviewer xác nhận đã sửa',false_positive:'Xác nhận không phải lỗi'}[status];
@@ -532,7 +627,7 @@ function renderIssues(){
  const merged=[...S.issues],seen=new Set(merged.map(i=>i.id));
  for(const [id,t] of Object.entries(S.tasks))if(!seen.has(id))merged.push({id,type:t.type,frame:t.frame,
  track_id:t.track_id,message:t.message||'Issue đã biến mất sau khi sửa – chờ Reviewer xác nhận',severity:'low',archived:true});
- const list=merged.filter(i=>{const status=S.tasks[i.id]?.status||null;
+ const list=merged.filter(i=>{const status=S.tasks[i.id]?.status||i.status||S.decisions[i.id]||null;
   return filter==='all'||(filter==='open'&&(!status||status==='needs_fix'||status==='fixed'))||
   (filter==='handoff'&&status==='needs_fix')||(filter==='fixed'&&status==='fixed')||
   (filter==='high'&&i.severity==='high')||i.type===filter;
@@ -540,11 +635,18 @@ function renderIssues(){
  dst.replaceChildren();if(!list.length){dst.innerHTML='<div class="side-empty">Không có cảnh báo phù hợp. Reviewer và Annotator làm việc qua các yêu cầu đã lưu trong Project.</div>';return}
  if(list.length>250){const note=document.createElement('p');note.className='side-empty';note.textContent=`Hiển thị 250/${list.length} issue`;dst.appendChild(note)}
  for(const i of list.slice(0,250)){
-  const t=S.tasks[i.id],status=t?.status;
+  const t=S.tasks[i.id],status=t?.status||i.status||S.decisions[i.id]||null;
   const e=document.createElement('article');e.className=`issue-card ${i.severity||'low'}${S.selectedIssue===i.id?' selected':''}${status?' reviewed':''}`;
-  e.innerHTML=`<div class="issue-headline"><b>${htmlEscape(i.type)}</b><span class="sev ${i.severity||'low'}">${htmlEscape(i.severity||'low')}</span></div>
- <div class="issue-info">Frame ${i.frame} · Track #${i.track_id}</div>
- ${status?`<span class="issue-status">${htmlEscape(statusText[status]||status)}</span>`:''}
+  const trackLabel = (i.track_id !== undefined && i.track_id !== null) ? `Track #${i.track_id}` : '';
+  e.innerHTML=`<div class="issue-headline">
+   <div class="issue-title-group">
+    <b>${htmlEscape(i.type)}</b>
+    <span class="issue-pill-badge frame-pill">Frame ${i.frame}</span>
+    ${trackLabel ? `<span class="issue-pill-badge track-pill">${htmlEscape(trackLabel)}</span>` : ''}
+   </div>
+   <span class="sev ${i.severity||'low'}">${htmlEscape(i.severity||'low')}</span>
+  </div>
+ ${status?`<span class="issue-status ${status==='false_positive'?'false-positive':''}">${htmlEscape(statusText[status]||status)}</span>`:''}
  <p class="issue-message">${htmlEscape(i.message)}</p>
  ${t?.note?`<div class="issue-note">${htmlEscape(t.updated_by)}: ${htmlEscape(t.note)}</div>`:''}
  <div class="issue-actions"></div>`;
@@ -610,12 +712,27 @@ function renderIssues(){
    }
   }
 
-  if(role()==='reviewer'){
+  if(canReview()){
    if(S.cvatJob){
     if(status==='false_positive'){
-     make('↩ Khôi phục issue','fix',()=>{delete S.decisions[i.id];delete i.status;renderIssues();metrics();toast('Đã khôi phục issue.')});
+     make('↩ Khôi phục Lỗi thật','fix',()=>{
+       delete S.decisions[i.id];
+       delete i.status;
+       if(S.tasks[i.id]) delete S.tasks[i.id].status;
+       renderIssues();
+       metrics();
+       toast('Đã khôi phục thành Lỗi thật.');
+     });
     }else{
-     make('✓ Bỏ qua (False positive)','reject',()=>{S.decisions[i.id]='false_positive';i.status='false_positive';renderIssues();metrics();toast('Đã đánh dấu bỏ qua issue này khi raise lên CVAT.')});
+     make('✓ Không phải lỗi','reject',()=>{
+       S.decisions[i.id]='false_positive';
+       i.status='false_positive';
+       if(!S.tasks[i.id]) S.tasks[i.id]={};
+       S.tasks[i.id].status='false_positive';
+       renderIssues();
+       metrics();
+       toast('Đã đánh dấu: Không phải lỗi (sẽ bỏ qua khi raise lên CVAT).');
+     });
     }
     make('✎ Ghi chú issue','outline',()=>{
      openDialog('Ghi chú issue cho Annotator',`
@@ -641,7 +758,29 @@ function renderIssues(){
    }else{
     if(!status||status==='needs_fix'){
      make('↪ Gửi Annotator','fix',()=>handoffDialog(i,'needs_fix'));
-     if(!status)make('✓ Không phải lỗi','reject',()=>handoffDialog(i,'false_positive'));
+     if(!status)make('✓ Không phải lỗi','reject',()=>{
+       if(!S.projectId){
+         S.decisions[i.id]='false_positive';
+         i.status='false_positive';
+         if(!S.tasks[i.id]) S.tasks[i.id]={};
+         S.tasks[i.id].status='false_positive';
+         renderIssues();
+         metrics();
+         toast('Đã đánh dấu: Không phải lỗi.');
+       }else{
+         handoffDialog(i,'false_positive');
+       }
+     });
+    }
+    if(status==='false_positive'){
+     make('↩ Khôi phục Lỗi thật','fix',()=>{
+       delete S.decisions[i.id];
+       delete i.status;
+       if(S.tasks[i.id]) delete S.tasks[i.id].status;
+       renderIssues();
+       metrics();
+       toast('Đã khôi phục thành Lỗi thật.');
+     });
     }
     if(status==='fixed'){
      make('✓ Xác nhận đã sửa','reject',()=>handoffDialog(i,'verified'));
@@ -674,12 +813,14 @@ function showPage(page){
  if(el('workspacePage'))el('workspacePage').hidden=!isWs;
  if(el('workspace'))el('workspace').hidden=!isWs;
  if(el('cvatJobsPage'))el('cvatJobsPage').hidden=page!=='cvatJobs';
- if(el('projectsPage'))el('projectsPage').hidden=page!=='projects';
+ if(el('projectsPage'))el('projectsPage').hidden=true;
  if(el('reportPage'))el('reportPage').hidden=page!=='report';
  if(el('auditPage'))el('auditPage').hidden=page!=='audit';
- if(el('importBar'))el('importBar').hidden=!isWs||S.mediaMode==='cvat-stream';
- if(el('cvatJobBanner'))el('cvatJobBanner').hidden=!isWs||!S.cvatJob;
- for(const [id,name] of [['navCvatJobs','cvatJobs'],['navProjects','projects'],['navWorkspace','workspace'],['navReport','report'],['navAudit','audit']]){
+ if(el('importBar'))el('importBar').hidden=true;
+ const hasJob=Boolean(S.cvatJob);
+ if(el('cvatJobBanner'))el('cvatJobBanner').hidden=!isWs||!hasJob;
+ if(el('cvatNoJobNotice'))el('cvatNoJobNotice').hidden=!isWs||hasJob;
+ for(const [id,name] of [['navCvatJobs','cvatJobs'],['navWorkspace','workspace'],['navReport','report'],['navAudit','audit']]){
   const b=el(id);if(b)b.classList.toggle('active',page===name);
  }
  if(page==='cvatJobs')renderCvatJobs();
@@ -705,12 +846,35 @@ function exportDialog(){if(!canEdit()||!S.boxes.length)return;openDialog('Xuất
  if(fmt==='json')download(r.filename,JSON.stringify(r.data,null,2),'application/json');
  else {download(r.filename,r.content,fmt==='cvat'?'application/xml':'text/plain');if(fmt==='mot')download('labels.txt',r.labels)}toast('Đã xuất dữ liệu. Vui lòng kiểm tra lại khi import CVAT.')
  }catch(e){toast(e.message,true)}}}])}
-function help(){openDialog('Hướng dẫn sử dụng',`<p><b>1.</b> Tải MOT TXT/CSV hoặc CVAT for video XML, rồi chọn ảnh/video để đối chiếu. Với MOT, có thể tải thêm <b>labels.txt</b>.</p>
- <p><b>2.</b> Nếu có frames.zip, bấm <b>Tải frames.zip</b>; nếu ảnh rời, chọn nhiều ảnh JPG/PNG. Với XML có N frame và N ảnh, chọn <b>Ghép ảnh: Tự động</b> hoặc <b>Theo thứ tự (XML)</b>. Không mặc định số cuối tên ảnh là frame XML.</p><p><b>3.</b> Chọn <b>Tạo project</b> để lưu công việc. Video được giải mã bằng FFmpeg trên máy chủ rồi hiển thị JPEG theo từng frame. Khi XML được lấy mẫu, điều chỉnh <b>Video start</b> và <b>Step</b>. Có thể tải video trước để xem và vẽ box.</p><p><b>4.</b> Nhập kích thước W, H và FPS đúng; nhấn <b>Quét lỗi</b>.</p>
- <p><b>4.</b> <b>Reviewer:</b> xem issue, gửi về Annotator cùng ghi chú hoặc đánh dấu False Positive. Reviewer không được kéo/xóa/sửa box.</p>
- <p><b>5.</b> <b>Annotator:</b> mở project, xem yêu cầu, sửa annotation, sau đó bấm Đã sửa · Gửi lại QC. <b>Reviewer:</b> xác nhận hoặc yêu cầu sửa tiếp.</p><p><b>6.</b> Chỉ Annotator được click box để chỉnh Track ID, Class và tọa độ. Kéo box để di chuyển; kéo góc phải-dưới để thay kích thước; ＋ Box để vẽ box mới.</p>
- <p><b>6.</b> Quality Gate kiểm tra lại; xuất MOT / CVAT XML / JSON, hoặc tải báo cáo.</p>
- <p><b>Lưu ý:</b> Track ID trong CVAT dạng ảnh thường không tồn tại; hệ thống không suy luận ID thật từ thứ tự box. Gap do che khuất và ID Switch chỉ là cảnh báo cần reviewer kiểm tra.</p>`,[{label:'Đóng',onClick:closeDialog}])}
+function help(){
+ openDialog('Hướng dẫn sử dụng CVAT QA Studio',`
+  <div style="font-size:13px;line-height:1.6;color:#334155;">
+    <p><b>1. Nhận việc & Xem Job từ CVAT:</b><br>
+    Truy cập trang <b>CVAT Jobs &amp; QC</b>. Danh sách các Job được phân công hoặc cần review chéo sẽ hiển thị theo tổ chức của bạn. Bấm <b>"Mở xem / QC"</b> hoặc <b>"Bắt đầu làm"</b> để mở Job.</p>
+    
+    <p><b>2. Tự động đồng bộ Media & Annotation:</b><br>
+    Hệ thống tự động nạp frame ảnh chất lượng cao và toàn bộ bounding boxes trực tiếp từ CVAT API. Bấm phím <code>P</code> để phát/dừng video, phím <code>←</code>/<code>→</code> để tua frame, chuột lăn để phóng to/thu nhỏ.</p>
+    
+    <p><b>3. Tự động kiểm tra lỗi (idcheck Core Rules):</b><br>
+    Các lỗi sai lệch nghiêm trọng được tự động phát hiện và đánh dấu trên Timeline:
+    <ul style="padding-left:18px;margin:4px 0;">
+      <li><b>ID Jump (Vận tốc giật):</b> Bounding box di chuyển bất thường giữa 2 frame liên tiếp.</li>
+      <li><b>ID Switch (Tráo đổi ID):</b> Hai đối tượng đi gần hoặc giao cắt nhau bị hoán đổi ID.</li>
+      <li><b>Fragmentation / Gap (Đứt quãng):</b> Đối tượng biến mất đột ngột không rõ lý do.</li>
+      <li><b>Duplicate Box:</b> Hai box trùng lặp trên cùng 1 đối tượng trong frame.</li>
+    </ul>
+    </p>
+
+    <p><b>4. Quy trình Phê duyệt & Đẩy về CVAT:</b><br>
+    <ul style="padding-left:18px;margin:4px 0;">
+      <li><b>Reviewer / Supervisor:</b> Kiểm tra danh sách lỗi. Bấm <b>"✓ Duyệt hoàn thành"</b> để nghiệm thu Job, hoặc bấm <b>"✕ Trả lại Annotator"</b> để hệ thống tự động cắm các điểm Issues lên CVAT cho Annotator sửa.</li>
+      <li><b>Annotator:</b> Xem các issue được chỉ định, nắn chỉnh lại box hoặc nối ID (Stitch ID), sau đó bấm <b>"☁️ Đẩy nhãn về CVAT"</b> (hệ thống tự động sao lưu và nén keyframe RDP &lt;0.5px).</li>
+      <li><b>Supervisor / Admin:</b> Bấm <b>"⚙️ Tune ngưỡng"</b> để tự động học các quy luật chuyển động từ các Job đã nghiệm thu và tối ưu hóa bộ lọc.</li>
+    </ul>
+    </p>
+  </div>
+ `, [{label:'Đã hiểu', className:'primary', onClick:closeDialog}]);
+}
 // ---------- Local persistent project workspace ----------
 let saveTimer=null,saveQueue=Promise.resolve(),restoringProject=false;
 function queueProjectSave(){
@@ -726,8 +890,8 @@ function projectState(){
                S.mediaFiles.length?{kind:'images'}:{kind:'none'}};
 }
 function updateProjectTitle(){
- el('currentProject').textContent=S.projectName||'Chưa chọn project';
- el('btnSaveProject').disabled=!S.projectId||!canEdit();
+ if(el('currentProject')) el('currentProject').textContent=S.projectName||'Chưa chọn project';
+ if(el('btnSaveProject')) el('btnSaveProject').disabled=!S.projectId||!canEdit();
 }
 function saveProject(silent=false){
  if(!S.projectId||!canEdit())return Promise.resolve();
@@ -819,29 +983,57 @@ async function renderCvatJobs(){
  try{
   const res=await api('cvat/jobs');
   if(el('cvatHostTag'))el('cvatHostTag').textContent='⚡ '+(res.cvat_host?res.cvat_host.replace(/^https?:\/\//,''):'CVAT Connected');
-  if(el('cvatStatusSummary'))el('cvatStatusSummary').innerHTML=`Tài khoản: <b>${htmlEscape(res.username)}</b> · Vai trò: <b>${htmlEscape(res.role.toUpperCase())}</b> (${res.filtered_count}/${res.all_count} jobs)`;
+  if(el('cvatStatusSummary'))el('cvatStatusSummary').innerHTML=`Tổ chức: <b>${htmlEscape(res.active_org||'Cá nhân')}</b> · Tài khoản: <b>${htmlEscape(res.username)}</b> · Vai trò: <b>${htmlEscape(res.role.toUpperCase())}</b> (${res.filtered_count}/${res.all_count} jobs)`;
   
   const userRole = role();
+  const allJobsList = res.all_jobs || res.jobs || [];
+  S.lastCvatJobs = allJobsList;
+
+  const projSel = el('cvatProjectFilter');
+  if (projSel) {
+    const projects = Array.from(new Set(allJobsList.map(j => j.project_name).filter(Boolean))).sort();
+    const curProj = projSel.value;
+    projSel.innerHTML = '<option value="">-- Tất cả dự án --</option>' + projects.map(p =>
+      `<option value="${htmlEscape(p)}" ${p === curProj ? 'selected' : ''}>${htmlEscape(p)}</option>`
+    ).join('');
+    if (curProj && projects.includes(curProj)) {
+      projSel.value = curProj;
+    }
+    if (!projSel.dataset.bound) {
+      projSel.dataset.bound = 'true';
+      projSel.onchange = () => renderCvatJobs();
+    }
+  }
+
+  const selectedProject = projSel?.value || '';
+  const filteredJobsByProj = selectedProject ? (res.jobs || []).filter(j => j.project_name === selectedProject) : (res.jobs || []);
+  const myUsername = (S.user?.username || '').toLowerCase();
+  const admin = isAdmin();
+  const superv = isSupervisor();
+
   let tabsConfig = [];
-  if (userRole === 'annotator') {
+  if (admin) {
    tabsConfig = [
-    { key: 'my_todo', label: '📌 Việc cần làm', filter: j => j.stage === 'annotation' && j.state !== 'rejected', empty: 'Hiện không có job nào đang chờ bạn gán nhãn.' },
-    { key: 'my_rejected', label: '⚠️ Bị trả về cần sửa', filter: j => j.stage === 'annotation' && j.state === 'rejected', empty: 'Tuyệt vời! Bạn không có job nào bị trả về cần sửa lỗi.' },
-    { key: 'all', label: 'Tất cả việc của tôi', filter: () => true, empty: 'Chưa có job nào được phân công cho bạn.' },
+    { key: 'all', label: '📋 Tất cả jobs', filter: () => true, empty: 'Không có job nào trên CVAT.' },
+    { key: 'validation', label: '🔍 Cần QC (Validation)', filter: j => j.stage === 'validation', empty: 'Không có job nào đang ở Validation.' },
+    { key: 'annotation', label: '✏️ Đang làm nhãn', filter: j => j.stage === 'annotation', empty: 'Không có job nào ở Annotation.' },
+    { key: 'acceptance', label: '✓ Đã nghiệm thu', filter: j => j.stage === 'acceptance', empty: 'Chưa có job nào nghiệm thu.' },
    ];
-  } else if (userRole === 'reviewer') {
+  } else if (superv) {
    tabsConfig = [
-    { key: 'validation', label: '🔍 Cần Review QC', filter: j => j.stage === 'validation', empty: 'Hiện không có job nào đang ở giai đoạn Validation cần QC.' },
-    { key: 'rejected', label: '↩ Đã trả lại Annotator', filter: j => j.state === 'rejected', empty: 'Chưa có job nào bị trả lại cho annotator.' },
-    { key: 'acceptance', label: '✓ Đã nghiệm thu', filter: j => j.stage === 'acceptance', empty: 'Chưa có job nào hoàn thành nghiệm thu.' },
-    { key: 'all', label: 'Tất cả jobs', filter: () => true, empty: 'Không có job nào trên hệ thống.' },
+    { key: 'validation', label: '🔍 Cần Review QC', filter: j => j.stage === 'validation', empty: 'Hiện không có job nào đang ở Validation cần QC.' },
+    { key: 'team_annotation', label: '👥 Team đang làm nhãn', filter: j => j.stage === 'annotation' && !j.is_my_annotation, empty: 'Team hiện không có job nào ở Annotation.' },
+    { key: 'my_annotation', label: '✏️ Việc tôi làm nhãn', filter: j => j.is_my_annotation, empty: 'Bạn không phụ trách làm nhãn job nào (các job do đồng nghiệp đảm nhận).' },
+    { key: 'acceptance', label: '✓ Đã nghiệm thu', filter: j => j.stage === 'acceptance', empty: 'Chưa có job nào nghiệm thu.' },
+    { key: 'all', label: '📋 Tất cả jobs', filter: () => true, empty: 'Không có job nào trên CVAT.' },
    ];
   } else {
    tabsConfig = [
-    { key: 'all', label: 'Tất cả jobs', filter: () => true, empty: 'Không có job nào trên hệ thống.' },
-    { key: 'validation', label: '🔍 Validation (Cần QC)', filter: j => j.stage === 'validation', empty: 'Không có job nào ở giai đoạn Validation.' },
-    { key: 'annotation', label: '✏️ Annotation (Annotator)', filter: j => j.stage === 'annotation', empty: 'Không có job nào ở giai đoạn Annotation.' },
-    { key: 'acceptance', label: '✓ Acceptance (Nghiệm thu)', filter: j => j.stage === 'acceptance', empty: 'Chưa có job nào hoàn thành nghiệm thu.' },
+    { key: 'my_annotation', label: '✏️ Việc tôi làm nhãn', filter: j => j.is_my_annotation, empty: 'Bạn chưa có job làm nhãn nào.' },
+    { key: 'my_review', label: '🔍 Việc tôi cần Review QC', filter: j => j.stage === 'validation' && (j.role_for_job === 'reviewer' || !j.is_my_annotation), empty: 'Hiện không có job nào của đồng nghiệp cần bạn Review QC.' },
+    { key: 'my_rejected', label: '⚠️ Bị trả lại cần sửa', filter: j => j.state === 'rejected' && j.is_my_annotation, empty: 'Tuyệt vời! Không có job nào của bạn bị trả lại.' },
+    { key: 'acceptance', label: '✓ Đã nghiệm thu', filter: j => j.stage === 'acceptance', empty: 'Chưa có job nào nghiệm thu.' },
+    { key: 'all', label: '📋 Tất cả jobs', filter: () => true, empty: 'Không có job nào trên CVAT.' },
    ];
   }
 
@@ -853,7 +1045,7 @@ async function renderCvatJobs(){
   if (tabsEl) {
    tabsEl.innerHTML = '';
    for (const t of tabsConfig) {
-    const count = (res.jobs || []).filter(t.filter).length;
+    const count = (filteredJobsByProj || []).filter(t.filter).length;
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'cvat-tab-btn' + (S.cvatActiveTab === t.key ? ' active' : '');
@@ -867,7 +1059,7 @@ async function renderCvatJobs(){
   }
 
   const activeTabConfig = tabsConfig.find(t => t.key === S.cvatActiveTab) || tabsConfig[0];
-  let list = (res.jobs || []).filter(activeTabConfig.filter);
+  let list = (filteredJobsByProj || []).filter(activeTabConfig.filter);
 
   if(!list.length){
    dst.innerHTML=`<div class="side-empty">${activeTabConfig.empty}<br><small>Nhấn "Đồng bộ từ CVAT" để cập nhật dữ liệu mới nhất.</small></div>`;
@@ -878,57 +1070,147 @@ async function renderCvatJobs(){
   for(const j of list){
    const card=document.createElement('div');card.className='cvat-card';
    const stageClass=j.stage||'annotation';
-   const isAnnotator=userRole==='annotator',isReviewer=userRole==='reviewer',isAdmin=userRole==='admin';
+   const isMyJob = Boolean(j.is_my_annotation);
+   const jobRole = j.role_for_job || (isMyJob ? 'annotator' : 'viewer');
    let actionsHtml=`<a href="${j.cvat_url}" target="_blank" class="outline small" title="Mở trực tiếp trên giao diện CVAT">🔗 CVAT</a>`;
-   if(isAnnotator){
-    if(j.stage==='annotation')actionsHtml+=`<button class="primary small btn-submit-validation" data-id="${j.id}">🚀 Gửi Reviewer (Nộp QC)</button>`;
-   }
-   if(isReviewer||isAdmin){
-    if(j.stage==='validation'){
-     actionsHtml+=`<button class="primary small btn-open-qc" data-id="${j.id}">🔍 Quét QC & Mở Studio</button>`;
-    }else if(j.state==='rejected'&&j.stage==='annotation'){
-     const targetAnnotator=j.annotator_name||j.assignee||'Annotator';
-     actionsHtml+=`<span class="pill" style="margin-left:auto;background:#fef3c7;color:#b45309;font-weight:600;font-size:11px;">⏳ Chờ ${htmlEscape(targetAnnotator)} sửa & nộp lại</span>`;
-    }else if(j.stage==='acceptance'){
-     actionsHtml+=`<span class="pill" style="margin-left:auto;background:#dcfce7;color:#15803d;font-weight:600;font-size:11px;">✓ Đã nghiệm thu</span>`;
+
+   if(j.stage==='annotation'){
+    if(j.state==='completed' || admin || jobRole==='reviewer'){
+     actionsHtml+=`<button class="primary small btn-pull-qc" data-id="${j.id}" title="Chuyển Job này sang giai đoạn Validation để tiến hành QC">⚡ Chuyển sang QC</button>`;
+    }
+    if(isMyJob){
+     actionsHtml+=`<button class="primary small btn-submit-validation" data-id="${j.id}" title="Hoàn tất và gửi Job cho Reviewer QC">🚀 Gửi Reviewer (Nộp QC)</button>`;
+     actionsHtml+=`<button class="outline small btn-open-qc" data-id="${j.id}">✏️ Mở làm nhãn</button>`;
     }else{
-     actionsHtml+=`<span class="pill" style="margin-left:auto;color:#64748b;font-size:11px;">✏️ Annotator đang làm nhãn</span>`;
+     actionsHtml+=`<button class="outline small btn-open-qc" data-id="${j.id}">${admin ? '⌕ Xem giám sát' : (jobRole==='reviewer' ? '🔍 Xem trước nhãn' : 'Xem chi tiết')}</button>`;
+     if(!admin && j.state!=='completed'){
+      actionsHtml+=`<span class="pill" style="margin-left:auto;color:#64748b;font-size:11px;">✏️ ${htmlEscape(j.assignee || 'Đồng nghiệp')} đang làm</span>`;
+     }
+    }
+    if(admin){
+     actionsHtml+=`<button class="outline small btn-assign-job" data-id="${j.id}">👤 Phân công</button>`;
+    }
+   }else if(j.stage==='validation'){
+    if(jobRole==='reviewer' || admin){
+     actionsHtml+=`<button class="primary small btn-open-qc" data-id="${j.id}">🔍 Quét QC & Review</button>`;
+    }else if(isMyJob){
+     actionsHtml+=`<button class="outline small btn-open-qc" data-id="${j.id}">Xem tiến độ QC</button>`;
+    }else{
+     actionsHtml+=`<button class="outline small btn-open-qc" data-id="${j.id}">Xem chi tiết</button>`;
+    }
+    if(admin){
+     actionsHtml+=`<button class="outline small btn-assign-job" data-id="${j.id}">👤 Phân công</button>`;
+    }
+   }else if(j.stage==='acceptance'){
+    actionsHtml+=`<button class="outline small btn-open-qc" data-id="${j.id}">Xem nghiệm thu</button>`;
+    if(admin){
+     actionsHtml+=`<button class="outline small btn-assign-job" data-id="${j.id}">👤 Phân công</button>`;
     }
    }
-   if(isAdmin)actionsHtml+=`<button class="ghost small btn-assign-job" data-id="${j.id}">👤 Gán Annotator</button>`;
 
    let statusBadge = `${j.stage} · ${j.state}`;
-   let assigneeDisplay = `Assignee: <b>${htmlEscape(j.assignee || 'Chưa gán')}</b>`;
+   const annoText = j.annotator_name ? `Annotator: <b>${htmlEscape(j.annotator_name)}</b>` : 'Annotator: <span style="color:#94a3b8;">Chưa gán</span>';
+   const revText = j.reviewer_name ? `Reviewer: <b>${htmlEscape(j.reviewer_name)}</b>` : 'Reviewer: <span style="color:#94a3b8;">Chưa gán</span>';
+   let assigneeDisplay = `${annoText} · ${revText}`;
    if (j.state === 'rejected' && j.stage === 'annotation') {
     statusBadge = `⚠️ ĐÃ TRẢ LẠI ANNOTATOR`;
-    const targetAnnotator = j.annotator_name || j.assignee || 'Annotator';
-    assigneeDisplay = `Đã trả lại cho: <b>${htmlEscape(targetAnnotator)}</b> <small style="color:#b45309;">(Chờ sửa)</small>`;
    } else if (j.stage === 'validation') {
     statusBadge = `🔍 CẦN REVIEW QC`;
-    if (j.annotator_name) {
-     assigneeDisplay = `Reviewer: <b>${htmlEscape(j.reviewer_name || j.assignee || 'Reviewer')}</b> · Annotator: <b>${htmlEscape(j.annotator_name)}</b>`;
-    }
    } else if (j.stage === 'acceptance') {
     statusBadge = `✓ ĐÃ NGHIỆM THU`;
    }
 
-   card.innerHTML=`<div class="cvat-card-head"><div><div class="cvat-card-title">Job #${j.id} <span style="font-size:12px;color:#8592a6;font-weight:normal;">(Task #${j.task_id})</span></div><div class="cvat-card-sub"><b>${htmlEscape(j.task_name)}</b> · <i>${htmlEscape(j.project_name)}</i></div></div><span class="stage-badge ${stageClass}">${statusBadge}</span></div><div class="cvat-card-body"><div class="cvat-card-meta">${assigneeDisplay}</div><div class="cvat-card-meta">Frames: <b>${j.frame_count}</b> (${j.start_frame}–${j.stop_frame})</div></div><div class="cvat-card-actions">${actionsHtml}</div>`;
+   let rolePill = '';
+   if(admin) rolePill = `<span class="job-role-pill admin">Lead/Admin</span>`;
+   else if(isMyJob) rolePill = `<span class="job-role-pill annotator">Annotator: Việc của bạn</span>`;
+   else if(jobRole==='reviewer') rolePill = `<span class="job-role-pill reviewer">Vai trò: Reviewer QC</span>`;
+   else rolePill = `<span class="job-role-pill" style="background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0;">Chỉ xem</span>`;
+
+   card.innerHTML=`<div class="cvat-card-head"><div><div class="cvat-card-title">Job #${j.id} <span style="font-size:12px;color:#8592a6;font-weight:normal;">(Task #${j.task_id})</span> ${rolePill}</div><div class="cvat-card-sub"><b>${htmlEscape(j.task_name)}</b> · <i>${htmlEscape(j.project_name)}</i></div></div><span class="stage-badge ${stageClass}">${statusBadge}</span></div><div class="cvat-card-body"><div class="cvat-card-meta">${assigneeDisplay}</div><div class="cvat-card-meta">Frames: <b>${j.frame_count}</b> (${j.start_frame}–${j.stop_frame})</div></div><div class="cvat-card-actions">${actionsHtml}</div>`;
    const btnSubmit=card.querySelector('.btn-submit-validation');if(btnSubmit)btnSubmit.onclick=()=>submitCvatJobForReview(j.id, j);
+   const btnPull=card.querySelector('.btn-pull-qc');if(btnPull)btnPull.onclick=()=>pullCvatJobToValidation(j.id, j);
    const btnOpen=card.querySelector('.btn-open-qc');if(btnOpen)btnOpen.onclick=()=>openCvatJobInStudio(j.id,j);
    const btnAssign=card.querySelector('.btn-assign-job');if(btnAssign)btnAssign.onclick=()=>assignCvatJobDialog(j.id,j);
    dst.appendChild(card);
   }
  }catch(e){dst.innerHTML=`<div class="side-empty" style="color:#d93442;">Lỗi kết nối CVAT: ${htmlEscape(e.message)}<br><small>Kiểm tra cấu hình .env (CVAT_HOST, CVAT_USER, CVAT_PASS)</small></div>`;}
 }
+async function pullCvatJobToValidation(job_id, jobMeta){
+ try{
+  setBusy(true);
+  const usersRes = await api('cvat/users').catch(() => ({users:[]}));
+  const myId = S.user?.id;
+  const users = usersRes.users || [];
+
+  let defaultRevId = jobMeta.reviewer_id || (role() === 'reviewer' || role() === 'supervisor' ? myId : null);
+  if (!defaultRevId && users.length) {
+   const candidate = users.find(u => u.role === 'reviewer') || users[0];
+   defaultRevId = candidate ? candidate.id : null;
+  }
+
+  const optionsHtml = users.length 
+    ? users.map(u => `<option value="${u.id}" ${defaultRevId === u.id ? 'selected' : ''}>${htmlEscape(u.username)} (${u.role === 'reviewer' ? 'Reviewer' : u.is_staff ? 'Lead/Admin' : 'Annotator'})</option>`).join('')
+    : '<option value="">-- Chọn Reviewer --</option>';
+
+  const annoName = jobMeta.annotator_name || jobMeta.assignee || 'Annotator';
+
+  openDialog(`Chuyển Job #${job_id} sang QC (Validation)`,
+   `<p style="font-size:13px;line-height:1.5;">Job <b>#${job_id}</b> (Task #${jobMeta.task_id}: ${htmlEscape(jobMeta.task_name)}) đang ở stage <b>Annotation</b> với trạng thái <code>${jobMeta.state}</code>.</p>
+    <p style="font-size:12px;color:#475569;margin-top:6px;">Chuyển sang stage <b>Validation</b> trên CVAT để tiến hành kiểm định và bắt lỗi (QC).</p>
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin:12px 0;display:flex;flex-direction:column;gap:8px;">
+      <div style="font-size:12px;">Annotator làm nhãn: <b>${htmlEscape(annoName)}</b></div>
+      <label style="font-size:12px;font-weight:700;display:block;">Chỉ định Reviewer QC:
+        <select id="selectPullReviewer" style="width:100%;margin-top:4px;padding:7px;border-radius:6px;border:1px solid #d3daea;font-size:13px;background:#fff;">
+          ${optionsHtml}
+        </select>
+      </label>
+    </div>
+    <p style="font-size:11px;color:#64748b;line-height:1.4;">
+      • Khi xác nhận, Job trên CVAT sẽ tự động chuyển sang <b>stage=validation, state=completed</b> và quyền phụ trách (assignee) sẽ gán cho Reviewer được chọn.
+    </p>`,
+   [
+     {label: 'Hủy', onClick: closeDialog},
+     {
+       label: 'Xác nhận chuyển sang QC',
+       className: 'primary',
+       onClick: async () => {
+         const revVal = el('selectPullReviewer')?.value;
+         const reviewer_id = revVal ? Number(revVal) : (defaultRevId || myId);
+         closeDialog();
+         try {
+           setBusy(true);
+           const res = await api('cvat/job/submit-validation', { job_id, reviewer_id });
+           toast(res.message || `Đã chuyển Job #${job_id} sang giai đoạn Validation.`);
+           if (role() === 'reviewer' || role() === 'supervisor') {
+             S.cvatActiveTab = 'validation';
+           }
+           await renderCvatJobs();
+         } catch (err) {
+           toast(err.message, true);
+         } finally {
+           setBusy(false);
+         }
+       }
+     }
+   ]
+  );
+ }catch(e){
+  toast(`Lỗi: ${e.message}`, true);
+ }finally{
+  setBusy(false);
+ }
+}
 async function submitCvatJobForReview(job_id, jobMeta){
  try{
   setBusy(true);
   const usersRes = await api('cvat/users').catch(() => ({users:[]}));
-  const reviewers = (usersRes.users || []).filter(u => u.role === 'reviewer' || u.role === 'admin' || u.is_staff);
-  const defaultRev = reviewers.find(u => u.role === 'reviewer') || reviewers[0];
-  const optionsHtml = reviewers.length 
-    ? reviewers.map(u => `<option value="${u.id}" ${defaultRev && defaultRev.id === u.id ? 'selected' : ''}>${htmlEscape(u.username)} (${u.role === 'reviewer' ? 'Reviewer' : 'Admin / Staff'})</option>`).join('')
-    : '<option value="">-- Mặc định --</option>';
+  const myName = (S.user?.username || '').toLowerCase();
+  const colleagues = (usersRes.users || []).filter(u => u.username.toLowerCase() !== myName);
+  const candidateList = colleagues.length ? colleagues : (usersRes.users || []);
+  const defaultCandidate = candidateList.find(u => u.role === 'reviewer') || candidateList[0];
+  const optionsHtml = candidateList.length 
+    ? candidateList.map(u => `<option value="${u.id}" ${defaultCandidate && defaultCandidate.id === u.id ? 'selected' : ''}>${htmlEscape(u.username)} (${u.role === 'reviewer' ? 'Reviewer' : u.is_staff ? 'Lead/Admin' : 'Đồng nghiệp QC'})</option>`).join('')
+    : '<option value="">-- Chọn Reviewer --</option>';
 
   openDialog('Gửi Job cho Reviewer QC',
    `<p>Bạn chuẩn bị hoàn tất và nộp <b>Job #${job_id}</b> để chuyển sang giai đoạn <b>Validation</b>.</p>
@@ -964,12 +1246,14 @@ async function openCvatJobInStudio(job_id,jobMeta){
  try{
   setBusy(true);toast(`Đang tải annotation Job #${job_id} từ CVAT và chạy quét lỗi idcheck...`);
   const fps=Number(el('cvatFpsInput')?.value||5.0),config=el('cvatConfigSelect')?.value||'config_project_3.yaml';
+  S.activeConfig=config;
   const r=await api('cvat/job/open',{job_id,fps,config});
   clearMedia();S.projectId=null;S.projectName=null;
-  S.cvatJob={id:r.job_id,task_id:r.task_id,stage:r.stage,state:r.state,assignee:r.assignee,cvat_url:r.cvat_url,total_frames:r.total_frames,frame_base:r.frame_base,width:r.width,height:r.height,fps:r.fps};
-  S.boxes=r.boxes||[];S.meta={format:'cvat',frame_base:r.frame_base??0,mode:'video',width:r.width,height:r.height,total_frames:r.total_frames,fps:r.fps,labels:r.labels||['Car'],task_name:`CVAT Job #${r.job_id}`};
+  S.activeConfig=r.config||config;
+  S.cvatJob={id:r.job_id,task_id:r.task_id,stage:r.stage,state:r.state,assignee:r.assignee,cvat_url:r.cvat_url,total_frames:r.total_frames,frame_base:r.frame_base,width:r.width,height:r.height,fps:r.fps,config:S.activeConfig};
+  S.boxes=(r.boxes||[]).filter(b=>!b.outside);S.meta={format:'cvat',frame_base:r.frame_base??0,mode:'video',width:r.width,height:r.height,total_frames:r.total_frames,fps:r.fps,config:S.activeConfig,labels:r.labels||['Car'],task_name:`CVAT Job #${r.job_id}`};
   S.session=null;S.sourceName=`CVAT Job #${r.job_id} (Task #${r.task_id})`;S.undo=[];S.redo=[];S.selectedUid=null;S.tasks={};resetDecisions();
-  S.issues=r.issues||[];S.lastScan={count:r.count,counts:r.counts,stats:r.stats,notes:[`Nạp trực tiếp từ CVAT API (Job #${r.job_id}).`,`Đã quét ${r.count} issues bằng idcheck core rules (${r.fps} FPS).`]};
+  S.issues=r.issues||[];S.lastScan={count:r.count,counts:r.counts,stats:r.stats,notes:[`Nạp trực tiếp từ CVAT API (Job #${r.job_id}).`,`Đã quét ${r.count} issues bằng idcheck core rules (${r.fps} FPS, ${S.activeConfig}).`]};
   if(r.width)el('imageWidth').value=r.width;if(r.height)el('imageHeight').value=r.height;el('fps').value=r.fps;el('datasetName').textContent=S.sourceName;
   indexBoxes();undoButtons();
   const startF=r.frame_base||0,totalF=r.total_frames||(r.boxes.length?Math.max(...r.boxes.map(b=>b.frame_id))-startF+1:1);
@@ -978,13 +1262,26 @@ async function openCvatJobInStudio(job_id,jobMeta){
   S.mediaMode='cvat-stream';el('mediaInfo').textContent=`⚡ CVAT Live Stream · Job #${r.job_id} · ${totalF} frames trực tiếp từ server`;
   el('cvatJobBanner').hidden=false;
   el('cvatBannerTitle').textContent=`CVAT Job #${r.job_id} · Task #${r.task_id}`;
-  el('cvatBannerSubtitle').textContent=`Stage: ${(r.stage||'').toUpperCase()} (${r.state}) · Assignee: ${r.assignee||'Chưa gán'} · ${r.count} issues phát hiện`;
+  el('cvatBannerSubtitle').textContent=`Stage: ${(r.stage||'').toUpperCase()} (${r.state}) · Assignee: ${r.assignee||'Chưa gán'} · ${r.count} issues · ⚙ ${S.activeConfig}`;
+  S.canReview = r.can_review;
+  S.canEditBoxes = r.can_edit_boxes;
+  S.cvatJobEffectiveRole = r.effective_role;
   el('btnCvatExternal').href=r.cvat_url;
   if(el('currentProject')) el('currentProject').textContent=`CVAT Job #${r.job_id} (Task #${r.task_id})`;
   if(el('datasetName')) el('datasetName').textContent=`⚡ Task #${r.task_id} · Job #${r.job_id}`;
-  const isValidation = r.stage === 'validation';
-  if(el('btnCvatAccept')) el('btnCvatAccept').hidden = !isValidation;
-  if(el('btnCvatReject')) el('btnCvatReject').hidden = !isValidation;
+  if(el('cvatJobRoleBadge')){
+    const eff = r.effective_role || 'viewer';
+    el('cvatJobRoleBadge').textContent = (eff === 'admin' ? 'Lead / Giám sát' : (eff === 'reviewer' ? 'Reviewer QC' : (eff === 'annotator' ? 'Annotator' : 'Chỉ xem')));
+    el('cvatJobRoleBadge').className = 'cvat-badge role-tag ' + eff;
+  }
+  if(el('cvatRoleHint')){
+    el('cvatRoleHint').hidden = false;
+    el('cvatRoleHint').textContent = r.can_review ? '✓ Bạn có quyền Review QC Job này' : (r.can_edit_boxes ? '✏️ Bạn có quyền Sửa nhãn Job này' : 'Chế độ chỉ xem (Viewer)');
+  }
+  if(el('btnCvatPush')) el('btnCvatPush').hidden = !r.can_edit_boxes;
+  if(el('btnCvatAccept')) el('btnCvatAccept').hidden = !r.can_review;
+  if(el('btnCvatReject')) el('btnCvatReject').hidden = !r.can_review;
+  if(el('btnCvatSubmitValidation')) el('btnCvatSubmitValidation').hidden = (r.stage !== 'annotation');
   S.frame=startF;refreshAll();showPage('workspace');
   toast(`Đã nạp Job #${r.job_id}: ${r.boxes.length} boxes, ${r.count} issues phát hiện.`);
  }catch(e){toast(`Lỗi khi mở CVAT Job #${job_id}: ${e.message}`,true)}finally{setBusy(false)}
@@ -1027,6 +1324,127 @@ async function assignCvatJobDialog(job_id,job){
    );
   }catch(e){toast(`Lỗi khi lấy danh sách user: ${e.message}`,true)}
  }
+
+async function loadCvatConfigs(selectedConfig){
+ const sel = el('cvatConfigSelect');
+ if(!sel) return;
+ try {
+  const res = await api('cvat/configs');
+  if (res.configs && res.configs.length) {
+   const curVal = selectedConfig || sel.value || 'config_project_3.yaml';
+   sel.innerHTML = res.configs.map(cfg => {
+    let label = cfg;
+    if (cfg === 'config_project_3.yaml') label += ' (BDD100K 5 FPS)';
+    else if (cfg === 'config_base.yaml') label += ' (Mặc định)';
+    return `<option value="${htmlEscape(cfg)}" ${cfg === curVal ? 'selected' : ''}>${htmlEscape(label)}</option>`;
+   }).join('');
+   if (selectedConfig) sel.value = selectedConfig;
+  }
+ } catch(e) {
+  console.warn('Could not load configs list:', e);
+ }
+}
+
+async function openTuneThresholdsDialog(){
+ if (!S.lastCvatJobs || !S.lastCvatJobs.length) {
+  try {
+   const res = await api('cvat/jobs');
+   S.lastCvatJobs = res.all_jobs || res.jobs || [];
+  } catch(e) {}
+ }
+ const completedJobs = (S.lastCvatJobs || []).filter(j => j.stage === 'acceptance');
+ if (!completedJobs.length) {
+  openDialog('⚙️ Tune ngưỡng từ Job đã nghiệm thu',
+   `<p style="font-size:13px;color:#1e293b;">Chưa có Job nào ở trạng thái <b>✓ Đã nghiệm thu (Acceptance)</b> trong tổ chức hiện tại.</p>
+    <p style="font-size:12px;color:#64748b;margin-top:8px;">Quy trình Auto-Calibrate cần ít nhất 1 Job đã kiểm duyệt hoàn tất làm <b>dữ liệu chuẩn (Ground Truth)</b> để học các quy luật chuyển động và tối ưu hóa bộ lọc. Khi bạn hoặc Reviewer nghiệm thu (Accept) một Job trên CVAT, quay lại đây để tune ngưỡng.</p>`,
+   [{label:'Đã hiểu', className:'primary', onClick:closeDialog}]
+  );
+  return;
+ }
+
+ const firstJob = completedJobs[0];
+ const projId = firstJob.project_id || 3;
+ const projName = firstJob.project_name || 'BDD100k_MOT';
+ const defaultOut = `config_project_${projId}.yaml`;
+
+ const jobsHtml = completedJobs.map(j => `
+  <div class="calibrate-job-row">
+   <label class="calibrate-job-label">
+    <input type="checkbox" class="cb-calib-job" value="${j.id}" checked>
+    <span><b>Job #${j.id}</b> <span style="color:#64748b;">(Task #${j.task_id}: ${htmlEscape(j.task_name)})</span></span>
+   </label>
+   <span style="color:#475569;font-size:11px;">Assignee: <b>${htmlEscape(j.assignee || 'Chưa gán')}</b> · <b>${j.frame_count}</b> frames</span>
+  </div>
+ `).join('');
+
+ openDialog('⚙️ Tune ngưỡng tự động từ Job đã nghiệm thu',
+  `<p style="font-size:13px;line-height:1.5;">Bạn có muốn <b>tự động hiệu chuẩn (tune) ngưỡng</b> phát hiện lỗi cho Project <b>${htmlEscape(projName)}</b> dựa trên <b>${completedJobs.length} Job mẫu đã hoàn thành</b> dưới đây không?</p>
+   <div style="max-height:180px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;margin:12px 0;">
+     ${jobsHtml}
+   </div>
+   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0;">
+     <label style="font-size:12px;font-weight:700;">FPS video:
+       <input id="tuneFps" type="number" step="0.5" value="${el('cvatFpsInput')?.value || 5.0}" style="margin-top:4px;padding:6px;width:100%;border-radius:6px;border:1px solid #d3daea;">
+     </label>
+     <label style="font-size:12px;font-weight:700;">Tên file cấu hình xuất:
+       <input id="tuneOutName" type="text" value="${htmlEscape(defaultOut)}" style="margin-top:4px;padding:6px;width:100%;border-radius:6px;border:1px solid #d3daea;">
+     </label>
+   </div>
+   <p style="font-size:11px;color:#475569;background:#eff6ff;padding:8px 10px;border-radius:6px;border:1px solid #dbeafe;line-height:1.4;">
+     💡 <b>Cơ chế hoạt động:</b> Hệ thống sẽ tải track sạch từ các Job đã chọn, sinh lỗi giả lập có kiểm soát (nhảy box, swap ID, đứt quãng) và chạy thuật toán Grid-Search F1-score để chọn ngưỡng nhạy nhất nhưng triệt tiêu tối đa báo oan (False Positives).
+   </p>`,
+  [
+   {label: 'Hủy', onClick: closeDialog},
+   {
+    label: '🚀 Bắt đầu Tune ngưỡng',
+    className: 'primary',
+    onClick: async () => {
+     const selectedCbs = Array.from(document.querySelectorAll('.cb-calib-job:checked'));
+     const selectedJobIds = selectedCbs.map(cb => Number(cb.value));
+     if (!selectedJobIds.length) {
+      return toast('Vui lòng chọn ít nhất 1 Job mẫu để tune ngưỡng.', true);
+     }
+     const fps = Number(el('tuneFps')?.value || 5.0);
+     const outName = el('tuneOutName')?.value.trim() || defaultOut;
+     closeDialog();
+     try {
+      setBusy(true);
+      toast(`Đang phân tích ${selectedJobIds.length} Job mẫu và tối ưu ngưỡng (vui lòng đợi vài giây)...`);
+      const res = await api('cvat/calibrate', {
+       job_ids: selectedJobIds,
+       project_id: projId,
+       project_name: projName,
+       fps: fps,
+       out_name: outName,
+      });
+      toast(res.message || 'Tối ưu ngưỡng thành công!');
+      await loadCvatConfigs(res.config_file);
+
+      const p = res.parameters || {};
+      openDialog('🎉 Kết quả Tune ngưỡng tối ưu',
+       `<p style="color:#15803d;font-weight:700;font-size:14px;">✓ Đã hiệu chuẩn thành công cấu hình: <code>${htmlEscape(res.config_file)}</code></p>
+        <p style="font-size:12px;color:#475569;">Dựa trên <b>${res.jobs_used?.length || 1} Job mẫu</b> (${res.total_tracks} tracks chuẩn) ở FPS = <b>${res.fps}</b>.</p>
+        <div class="calibrate-result-grid">
+          <div><b>Tốc độ nhảy box (max_speed):</b><br><span style="color:#2563eb;font-weight:700;">${p.max_speed} px/s</span></div>
+          <div><b>Khoảng cách swap (swap_min_sep):</b><br><span style="color:#2563eb;font-weight:700;">${p.swap_min_sep}</span></div>
+          <div><b>Tỷ lệ cắt ngang (swap_cross_ratio):</b><br><span style="color:#2563eb;font-weight:700;">${p.swap_cross_ratio}</span></div>
+          <div><b>Chi phí ghép track (merge_max_cost):</b><br><span style="color:#2563eb;font-weight:700;">${p.merge_max_cost}</span></div>
+          <div><b>Khoảng cách đứt tối đa (max_merge_gap_s):</b><br><span style="color:#2563eb;font-weight:700;">${p.max_merge_gap_s}s</span></div>
+        </div>
+        <p style="margin-top:12px;font-size:12px;color:#1e293b;">File cấu hình mới đã được tự động áp dụng vào ô <b>Cấu hình</b> để bạn quét và kiểm định các Job tiếp theo.</p>`,
+       [{label: 'Hoàn tất & Đóng', className: 'primary', onClick: closeDialog}]
+      );
+     } catch(e) {
+      toast(`Lỗi khi tune ngưỡng: ${e.message}`, true);
+     } finally {
+      setBusy(false);
+     }
+    }
+   }
+  ]
+ );
+}
+
 function showBenchmarkResults(r){
  const targetMet = r.target_met;
  const precPct = (r.precision * 100).toFixed(1);
@@ -1098,8 +1516,9 @@ function showBenchmarkResults(r){
    </div>
   </div>
   <p style="font-size:12px;color:#475569;margin-bottom:6px">
-   Tổng GT: <b>${r.ground_truth_count}</b> · Dự đoán: <b>${r.predicted_count}</b> ${r.baseline_ignored ? `· Bỏ qua baseline: <b>${r.baseline_ignored}</b>` : ''}
+   Tổng GT: <b>${r.ground_truth_count}</b> · Dự đoán: <b>${r.predicted_count}</b> ${r.baseline_ignored ? `· Bỏ qua baseline: <b>${r.baseline_ignored}</b>` : ''} ${r.absent_ignored ? `· Bỏ qua class_flip: <b>${r.absent_ignored}</b>` : ''} · Cấu hình: <b>${htmlEscape(r.config_used || '')}</b>
   </p>
+  ${r.note ? `<p style="font-size:12px;color:#0369a1;background:#f0f9ff;border:1px solid #bae6fd;padding:6px 10px;border-radius:6px;margin:8px 0;">ℹ️ ${htmlEscape(r.note)}</p>` : ''}
   <table class="bm-table">
    <thead>
     <tr>
@@ -1125,9 +1544,23 @@ function showBenchmarkResults(r){
 function wire(){
  el('navCvatJobs').onclick=()=>{showPage('cvatJobs');renderCvatJobs()};
  el('btnRefreshCvat').onclick=renderCvatJobs;
+ if(el('btnTuneThresholds')) el('btnTuneThresholds').onclick=openTuneThresholdsDialog;
  if(el('cvatStageFilter')) el('cvatStageFilter').onchange=renderCvatJobs;
+ if(el('btnCvatRescan')) el('btnCvatRescan').onclick=async()=>{
+  if(!S.cvatJob)return toast('Không có CVAT Job nào đang mở.',true);
+  try{
+   setBusy(true);
+   await scan();
+   toast(`Đã quét lại lỗi theo cấu hình ${S.activeConfig || 'config_project_3.yaml'} và dữ liệu hiện tại.`);
+  }catch(e){toast(e.message,true)}finally{setBusy(false)}
+ };
+ if(el('btnGoToCvatJobs')) el('btnGoToCvatJobs').onclick=()=>showPage('cvatJobs');
+ if(el('btnCanvasGoToJobs')) el('btnCanvasGoToJobs').onclick=()=>showPage('cvatJobs');
  el('btnCvatReject').onclick=rejectCvatJobDialog;
  el('btnCvatAccept').onclick=acceptCvatJobDialog;
+ if(el('btnCvatSubmitValidation')) el('btnCvatSubmitValidation').onclick=()=>{
+  if(S.cvatJob) pullCvatJobToValidation(S.cvatJob.id, S.cvatJob);
+ };
  if(el('btnCvatPush')){
   el('btnCvatPush').onclick=()=>{
    if(!S.cvatJob)return toast('Không có CVAT Job nào đang mở.',true);
@@ -1166,12 +1599,13 @@ function wire(){
       <input type="file" id="bmGtFile" accept=".json" style="margin-top:4px">
     </label>
     <label style="display:block;margin-bottom:8px">
-      <b>File Baseline (Tùy chọn - để loại trừ lỗi đã có từ dữ liệu gốc):</b>
-      <input type="file" id="bmBaseFile" accept=".json" style="margin-top:4px">
+      <b>File Baseline sạch (Tùy chọn: <code>&lt;video&gt;.zip</code>, <code>.xml</code> hoặc <code>.json</code>):</b>
+      <input type="file" id="bmBaseFile" accept=".zip,.xml,.json" style="margin-top:4px">
     </label>
-    <div style="display:flex;gap:15px;align-items:center;margin-top:10px">
+    <div style="display:flex;gap:15px;align-items:center;margin-top:10px;flex-wrap:wrap">
       <label style="font-size:12px">Tolerance frame: <input id="bmTol" type="number" min="0" max="10" value="2" style="width:50px"></label>
-      <label style="font-size:12px"><input id="bmOnlyGt" type="checkbox" checked> Chỉ tính các loại lỗi có trong GT</label>
+      <label style="font-size:12px"><input id="bmOnlyGt" type="checkbox" checked> Chỉ tính loại lỗi có trong GT</label>
+      <label style="font-size:12px"><input id="bmIgnoreClassFlip" type="checkbox" checked> Bỏ qua class_flip (không có trong CVAT XML)</label>
     </div>
    `,[
     {label:'Hủy',onClick:closeDialog},
@@ -1185,22 +1619,46 @@ function wire(){
         const gtList=Array.isArray(gtJson)?gtJson:(gtJson.ground_truth||[]);
         
         let baseList=[];
+        let baseBoxes=null;
         const baseInput=el('bmBaseFile');
         if(baseInput&&baseInput.files.length){
-          const bText=await baseInput.files[0].text();
-          const bJson=JSON.parse(bText);
-          baseList=Array.isArray(bJson)?bJson:(bJson.ground_truth||bJson.baseline||[]);
+          const bFile=baseInput.files[0];
+          const bName=bFile.name.toLowerCase();
+          toast('Đang đọc và phân tích file baseline sạch...');
+          if(bName.endsWith('.zip')){
+            const bRes=await fetch('/api/annotation/import',{
+              method:'POST',
+              headers:{'Content-Type':'application/zip','X-T021-Filename':encodeURIComponent(bFile.name)},
+              body:bFile
+            });
+            const bData=await bRes.json();
+            if(!bRes.ok) throw Error(bData.error||'Không đọc được file baseline ZIP');
+            baseBoxes=(bData.boxes||[]).filter(b=>!b.outside);
+          } else if(bName.endsWith('.xml')){
+            const bText=await bFile.text();
+            const bData=await api('parse',{filename:bFile.name,content:bText,labels_text:S.labelsText});
+            baseBoxes=(bData.boxes||[]).filter(b=>!b.outside);
+          } else {
+            const bText=await bFile.text();
+            const bJson=JSON.parse(bText);
+            baseList=Array.isArray(bJson)?bJson:(bJson.ground_truth||bJson.baseline||[]);
+            if(bJson.boxes) baseBoxes=bJson.boxes.filter(b=>!b.outside);
+          }
         }
         
         const tol=Number(el('bmTol').value||2);
-        const onlyGt=el('bmOnlyGt').checked;
-        
+        const onlyGt=el('bmOnlyGt')?.checked ?? true;
+        const ignoreClassFlip=el('bmIgnoreClassFlip')?.checked ?? true;
+        const cfgVal = S.activeConfig || S.meta?.config || el('cvatConfigSelect')?.value || 'config_project_3.yaml';
         const res=await api('benchmark/evaluate',{
           boxes:S.boxes,
           ground_truth:gtList,
           baseline:baseList,
+          baseline_boxes:baseBoxes,
           tolerance:tol,
           only_gt_types:onlyGt,
+          ignore_class_flip:ignoreClassFlip,
+          config:cfgVal,
           meta:readMeta()
         });
         
@@ -1220,8 +1678,8 @@ function wire(){
  el('btnAdminUsers').onclick=openUserDialog;el('btnLogout').onclick=async()=>{
  await api('auth/logout').catch(()=>{});location.reload()};
  el('btnSaveSession').onclick=()=>{const data={project_type:'t021_project',version:2,source_name:S.sourceName,meta:readMeta(),boxes:S.boxes,decisions:S.decisions,saved_at:new Date().toISOString()};download('track_qa_session.t021.json',JSON.stringify(data,null,2),'application/json')};
- el('btnCreateProject').onclick=askCreateProject;el('btnSaveProject').onclick=()=>saveProject(false);
- el('btnProjectPageCreate').onclick=askCreateProject;el('navProjects').onclick=async()=>{showPage('projects');await renderProjects()};
+ if(el('btnCreateProject')) el('btnCreateProject').onclick=askCreateProject;if(el('btnSaveProject')) el('btnSaveProject').onclick=()=>saveProject(false);
+ if(el('btnProjectPageCreate')) el('btnProjectPageCreate').onclick=askCreateProject;if(el('navProjects')) el('navProjects').onclick=async()=>{showPage('projects');await renderProjects()};
  el('btnDemo').onclick=loadDemo;el('btnHelp').onclick=help;el('btnScan').onclick=scan;el('sideTabIssues')?.addEventListener('click',()=>switchSideTab('issues'));
 el('sideTabBoxes')?.addEventListener('click',()=>switchSideTab('boxes'));
 el('frameBoxSearch')?.addEventListener('input',()=>renderFrameBoxes());
@@ -1264,6 +1722,7 @@ el('btnExport').onclick=()=>{if(canEdit())exportDialog()};
   window.addEventListener('keydown',e=>{
    if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||!el('dialog').hidden)return;
    if(e.code==='Space'&&!e.repeat){S.spaceDown=true;el('viewer')?.classList.add('pan-ready');e.preventDefault();return}
+   if(e.key==='Escape'){if(S.selectedUid||S.selectedTrackId!==null){selectBox(null);return}}
    if(e.key==='0'||e.code==='Numpad0'||e.key==='r'){resetZoom();return}
    if(e.key==='+'||e.key==='='||e.code==='NumpadAdd'){zoomAtCenter(1.25);return}
    if(e.key==='-'||e.key==='_'||e.code==='NumpadSubtract'){zoomAtCenter(1/1.25);return}
@@ -1308,47 +1767,75 @@ el('btnExport').onclick=()=>{if(canEdit())exportDialog()};
   if(el('btnZoomOut')) el('btnZoomOut').onclick=()=>zoomAtCenter(1/1.25);
   if(el('btnZoomReset')) el('btnZoomReset').onclick=()=>resetZoom();
   if(el('zoomPercent')) el('zoomPercent').onclick=()=>resetZoom();
+  if(el('btnDeselectBox')) el('btnDeselectBox').onclick=()=>selectBox(null);
 
   c.addEventListener('pointerdown',e=>{
    if(!S.boxes.length&&!S.isCreate&&!S.videoToken&&!S.mediaFiles.length)return;
    const isPanBtn=e.button===1||e.button===2||e.altKey||S.spaceDown;
    const p=toWorld(e);
    const v=hit(p);
-   if(isPanBtn||(!canEdit()&&!v)||(canEdit()&&!S.isCreate&&!v)){
-    S.panDrag={startX:e.clientX,startY:e.clientY,origPanX:S.panX,origPanY:S.panY,moved:false,clickEmpty:!isPanBtn&&!v};
+   if(isPanBtn){
+    S.panDrag={startX:e.clientX,startY:e.clientY,origPanX:S.panX,origPanY:S.panY,moved:false,clickEmpty:false};
     c.classList.add('panning');
     c.setPointerCapture(e.pointerId);
     return;
    }
-   if(!canEdit()){
-    selectBox(v?.box?.uid||null);
-    S.panDrag={startX:e.clientX,startY:e.clientY,origPanX:S.panX,origPanY:S.panY,moved:false,clickEmpty:false};
+   if(S.isCreate){
     c.setPointerCapture(e.pointerId);
+    S.drag={type:'create',start:p,preview:[p.x,p.y,0,0]};
     return;
    }
+   if(v){
+    selectBox(v.box.uid);
+    c.setPointerCapture(e.pointerId);
+    if(canEdit()){
+     S.drag={type:v.type,start:p,orig:{...v.box},preview:null};
+    }
+    return;
+   }
+   // Click on empty space: prepare pan drag if moved > 6px
+   S.panDrag={startX:e.clientX,startY:e.clientY,origPanX:S.panX,origPanY:S.panY,moved:false,clickEmpty:true};
    c.setPointerCapture(e.pointerId);
-   if(S.isCreate){S.drag={type:'create',start:p,preview:[p.x,p.y,0,0]};return}
-   if(!v){selectBox(null);return}
-   selectBox(v.box.uid);S.drag={type:v.type,start:p,orig:{...v.box},preview:null};
   });
   c.addEventListener('pointermove',e=>{
    if(S.panDrag){
     const r=c.getBoundingClientRect();
     const dx=(e.clientX-S.panDrag.startX)*(c.width/r.width);
     const dy=(e.clientY-S.panDrag.startY)*(c.height/r.height);
-    if(Math.abs(dx)>2||Math.abs(dy)>2) S.panDrag.moved=true;
-    S.panX=S.panDrag.origPanX+dx;
-    S.panY=S.panDrag.origPanY+dy;
+    if(Math.hypot(dx,dy)>6){
+     S.panDrag.moved=true;
+     c.classList.add('panning');
+    }
+    if(S.panDrag.moved){
+     S.panX=S.panDrag.origPanX+dx;
+     S.panY=S.panDrag.origPanY+dy;
+     draw();
+    }
+    return;
+   }
+   if(S.drag){
+    const p=toWorld(e),d=S.drag;
+    if(d.type==='create'){const x=Math.min(d.start.x,p.x),y=Math.min(d.start.y,p.y);d.preview=[x,y,Math.abs(p.x-d.start.x),Math.abs(p.y-d.start.y)];draw();return}
+    const b=S.boxes.find(v=>v.uid===d.orig.uid);if(!b)return;
+    if(d.type==='move'){b.x=Math.max(0,d.orig.x+p.x-d.start.x);b.y=Math.max(0,d.orig.y+p.y-d.start.y)}
+    else if(d.type==='resize'){b.w=Math.max(2,d.orig.w+p.x-d.start.x);b.h=Math.max(2,d.orig.h+p.y-d.start.y)}
     draw();
     return;
    }
-   if(!S.drag)return;
-   const p=toWorld(e),d=S.drag;
-   if(d.type==='create'){const x=Math.min(d.start.x,p.x),y=Math.min(d.start.y,p.y);d.preview=[x,y,Math.abs(p.x-d.start.x),Math.abs(p.y-d.start.y)];draw();return}
-   const b=S.boxes.find(v=>v.uid===d.orig.uid);if(!b)return;
-   if(d.type==='move'){b.x=Math.max(0,d.orig.x+p.x-d.start.x);b.y=Math.max(0,d.orig.y+p.y-d.start.y)}
-   else if(d.type==='resize'){b.w=Math.max(2,d.orig.w+p.x-d.start.x);b.h=Math.max(2,d.orig.h+p.y-d.start.y)}
-   draw();
+   if(!S.spaceDown){
+    const p=toWorld(e);
+    const v=hit(p);
+    const prevHover=S.hoveredUid;
+    S.hoveredUid=v?.box?.uid||null;
+    c.style.cursor=v?'pointer':'crosshair';
+    if(prevHover!==S.hoveredUid)draw();
+   }
+  });
+  c.addEventListener('pointerleave',()=>{
+   if(S.hoveredUid){
+    S.hoveredUid=null;
+    draw();
+   }
   });
   c.addEventListener('pointerup',async e=>{
    if(S.panDrag){
@@ -1356,8 +1843,9 @@ el('btnExport').onclick=()=>{if(canEdit())exportDialog()};
     const clickEmpty=S.panDrag.clickEmpty;
     S.panDrag=null;
     c.classList.remove('panning');
-    if(moved)return;
-    if(clickEmpty)selectBox(null);
+    if(!moved&&clickEmpty){
+     selectBox(null);
+    }
     return;
    }
    if(!S.drag)return;
@@ -1379,11 +1867,62 @@ el('btnExport').onclick=()=>{if(canEdit())exportDialog()};
   });
 }
 function role(){return S.user?.role||''}
-function canEdit(){return role()==='annotator'||role()==='admin'}
+function isAdmin(){return role()==='admin'}
+function isSupervisor(){return role()==='supervisor'||role()==='reviewer'||isAdmin()}
+function isWorker(){return role()==='worker'||role()==='annotator'}
+function canEdit(){return Boolean(S.canEditBoxes || isWorker() || isAdmin())}
+function canReview(){return Boolean(S.canReview || isSupervisor() || role()==='reviewer')}
+
+async function loadOrganizations(){
+ const select = el('selectOrg');
+ if(!select) return;
+ try {
+  const res = await api('cvat/organizations');
+  const orgs = res.organizations || [];
+  select.innerHTML = orgs.map(o => 
+   `<option value="${htmlEscape(o.slug)}" ${o.slug === res.active_org ? 'selected' : ''}>${htmlEscape(o.name || o.slug)} (${(o.role||'user').toUpperCase()})</option>`
+  ).join('');
+  if(S.user && res.active_org !== undefined) {
+   S.user.active_org = res.active_org;
+  }
+ } catch(e) {
+  console.warn('Could not load organizations:', e);
+  select.innerHTML = '<option value="" selected>Cá nhân (Personal Workspace)</option>';
+ }
+}
+
+function initOrgSelector(){
+ const select = el('selectOrg');
+ if(!select || select.dataset.bound) return;
+ select.dataset.bound = 'true';
+ select.onchange = async (ev) => {
+  const newOrg = ev.target.value;
+  try {
+   setBusy(true);
+   toast(`Đang chuyển sang tổ chức: ${newOrg || 'Cá nhân'}...`);
+   const res = await api('cvat/organization/set', { org_slug: newOrg });
+   toast(res.message || 'Đã chuyển tổ chức');
+   if(S.user) {
+    S.user.role = res.role;
+    S.user.active_org = res.active_org;
+   }
+   updateRoleUI();
+   await renderCvatJobs();
+  } catch(e) {
+   toast(`Lỗi chuyển tổ chức: ${e.message}`, true);
+   await loadOrganizations();
+  } finally {
+   setBusy(false);
+  }
+ };
+}
+
 function updateRoleUI(){
- const edit=canEdit(),admin=role()==='admin',isRev=role()==='reviewer',isAnno=role()==='annotator';
- document.body.classList.toggle('reviewer-mode',isRev);
- if(el('importRoleNotice')) el('importRoleNotice').hidden=!isRev;
+ const admin=isAdmin(), superv=isSupervisor(), worker=isWorker();
+ const isRev=canReview();
+ document.body.classList.toggle('reviewer-mode', !admin && !worker);
+ if(el('importRoleNotice')) el('importRoleNotice').hidden=true;
+ if(el('importBar')) el('importBar').hidden=true;
  if(el('operatorUsername')){
   el('operatorUsername').textContent=S.user?.username||'—';
   el('operatorUsername').title=S.user?.username||'—';
@@ -1397,36 +1936,65 @@ function updateRoleUI(){
  if(el('btnAdminUsers')) el('btnAdminUsers').hidden=!admin;
 
  // Phân quyền thanh điều hướng Sidebar theo vai trò:
- // Annotator làm việc trên CVAT nên trên Web App chỉ cần tab CVAT Jobs:
- if(el('navWorkspace')) el('navWorkspace').hidden = isAnno;
- if(el('navProjects')) el('navProjects').hidden = isAnno || isRev;
- if(el('navReport')) el('navReport').hidden = isAnno;
- if(el('navAudit')) el('navAudit').hidden = isAnno;
+ // - Worker / Annotator: Chỉ thấy CVAT Jobs & Review Workspace
+ // - Supervisor: Thấy thêm QA Report, Audit History
+ // - Admin: Toàn quyền (bao gồm cả Projects / Phiên làm việc offline)
+ if(el('navCvatJobs')) el('navCvatJobs').hidden = false;
+ if(el('navWorkspace')) el('navWorkspace').hidden = false;
+ if(el('navProjects')) el('navProjects').hidden = !admin;
+ if(el('navReport')) el('navReport').hidden = !superv;
+ if(el('navAudit')) el('navAudit').hidden = !superv;
+ if(el('btnTuneThresholds')) el('btnTuneThresholds').hidden = !superv;
 
- // Ẩn các nút offline/demo/sửa nhãn đối với Reviewer (không được trực tiếp sửa box):
- for(const id of ['btnCreateProject','btnSaveProject','btnCreateMode','btnSaveBox','btnDeleteBox',
- 'btnStitch','btnSwap','btnUndo','btnRedo','btnExport','btnSaveSession','btnDemo','btnCvatPush']){
-  const button=el(id);if(button)button.hidden=!edit;
+ // Ẩn toàn bộ nút tạo / lưu / xuất offline đối với Worker & Supervisor, CHỈ Admin mới thấy:
+ for(const id of ['btnCreateProject','btnSaveProject','btnSaveSession','btnDemo','btnExport','btnProjectPageCreate']){
+  const button=el(id);
+  if(button) button.hidden = !admin;
+ }
+
+ // Quyền sửa bounding box trên thanh công cụ Workspace:
+ const canModifyBox = admin || S.canEditBoxes || (worker && !S.cvatJob);
+ for(const id of ['btnCreateMode','btnSaveBox','btnDeleteBox','btnStitch','btnSwap','btnUndo','btnRedo']){
+  const button=el(id);
+  if(button) button.hidden = !canModifyBox;
  }
  for(const id of ['fieldTrack','fieldClass','fieldX','fieldY','fieldW','fieldH']) {
-  if(el(id)) el(id).disabled=!edit;
+  if(el(id)) el(id).disabled = !canModifyBox;
  }
- if(el('btnProjectPageCreate')) el('btnProjectPageCreate').hidden=true;
+
  setBusy(false);undoButtons();selectBox(S.selectedUid);renderIssues();
 }
 async function initAuth(){
  const gate=el('authGate'),form=el('authForm');
  try{
   const me=await api('auth/me').catch(()=>null);
-  if(me?.user){S.user=me.user;gate.hidden=true;updateRoleUI();showPage('cvatJobs');renderCvatJobs();return}
+  if(me?.user){
+   S.user=me.user;
+   gate.hidden=true;
+   updateRoleUI();
+   await loadOrganizations();
+   initOrgSelector();
+   await loadCvatConfigs();
+   showPage('cvatJobs');
+   renderCvatJobs();
+   return;
+  }
  }catch(e){el('authMessage').textContent='Không kết nối được backend: '+e.message}
  el('authDescription').textContent='Đăng nhập bằng tài khoản CVAT của bạn (cvat.trantuli.id.vn); tự động đồng bộ vai trò & danh sách job.';
  el('authSubmit').textContent='Đăng nhập qua CVAT';
  form.onsubmit=async ev=>{
   ev.preventDefault();const username=el('authUsername').value.trim(),password=el('authPassword').value;
   try{
-   const r=await api('auth/login',{username,password});S.user=r.user;gate.hidden=true;
-   el('authMessage').textContent='';updateRoleUI();showPage('cvatJobs');renderCvatJobs();toast('Đã đăng nhập qua CVAT: '+username+' ('+r.user.role+')');
+   const r=await api('auth/login',{username,password});
+   S.user=r.user;
+   gate.hidden=true;
+   el('authMessage').textContent='';
+   updateRoleUI();
+   await loadOrganizations();
+   initOrgSelector();
+   showPage('cvatJobs');
+   renderCvatJobs();
+   toast('Đã đăng nhập qua CVAT: '+username+' ('+r.user.role+')');
   }catch(e){el('authMessage').textContent=e.message}
  };
 }
