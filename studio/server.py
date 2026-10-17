@@ -20,7 +20,7 @@ from backend.orchestrator import ROUTES
 from studio_core.parsers import parse_cvat_archive
 from backend.media import STORE, MAX_ZIP_BYTES
 from backend.video import VIDEO, MAX_VIDEO_BYTES
-from backend import projects, auth, workflow, cvat_workflow
+from backend import projects, auth, workflow, cvat_workflow, benchmark
 
 ROOT=Path(__file__).resolve().parent
 STATIC=ROOT/'static'
@@ -168,14 +168,16 @@ class Handler(SimpleHTTPRequestHandler):
             if route=='/api/cvat/job/accept':return self.json(cvat_workflow.accept_job(req,actor))
             if route=='/api/cvat/job/assign':return self.json(cvat_workflow.assign_job(req,actor))
             if route=='/api/cvat/users':return self.json(cvat_workflow.list_cvat_users(actor))
-            if route=='/api/fix':auth.require(actor,'annotator')
+            if route=='/api/cvat/job/push':return self.json(cvat_workflow.push_job_annotations(req,actor))
+            if route=='/api/benchmark/evaluate':return self.json(benchmark.evaluate(req,actor))
+            if route=='/api/fix':auth.require(actor,'annotator','reviewer','admin')
             if route=='/api/review':raise ValueError('Dùng /api/workflow/transition để QC và chuyển lỗi cho Annotator')
-            if route in ('/api/projects/create','/api/projects/save'):auth.require(actor,'annotator')
+            if route in ('/api/projects/create','/api/projects/save'):auth.require(actor,'annotator','reviewer','admin')
             if route in ('/api/projects/rename','/api/projects/delete'):auth.require(actor,'annotator','admin')
             if route=='/api/projects/save':
                 # Review decisions are stored by server workflows, never trusted from annotator/browser state.
                 req['state']=dict(req.get('state') or {},decisions={})
-            if route=='/api/export':auth.require(actor,'annotator')
+            if route=='/api/export':auth.require(actor,'annotator','reviewer','admin')
             return self.json((PROJECT_ROUTES if route in PROJECT_ROUTES else ROUTES)[route](req))
         except PermissionError as exc:
             return self.json({'error':str(exc)},403)

@@ -92,21 +92,27 @@ def scan(body):
         if t == 'invalid_box':
             issues.append(issue('Invalid Box', f, tid, detail, severity='high'))
         elif t == 'gap':
-            gap_len = err.get('gap', 0)
+            gap_len = int(err.get('gap', 0))
             sev = 'high' if gap_len > 10 else 'medium'
-            issues.append(issue('Gap Frame', f, tid, detail, severity=sev))
+            sugg = 'interpolate_gap' if 2 <= gap_len <= 4 else 'review'
+            data = {'track_id': tid, 'from_frame': f, 'to_frame': f + gap_len}
+            issues.append(issue('Gap Frame', f, tid, detail, severity=sev, suggestion=sugg, data=data))
         elif t == 'jump':
             issues.append(issue('Box Jump', f, tid, detail, severity='high'))
         elif t == 'class_flip':
-            issues.append(issue('Class Change', f, tid, detail, severity='high'))
+            expected_class = err.get('expected_class') or (tracks[tid].label if tid in tracks else 'Car')
+            data = {'track_id': tid, 'class_name': expected_class}
+            issues.append(issue('Class Change', f, tid, detail, severity='high', suggestion='set_class', data=data))
         elif t == 'duplicate':
             other_id = err.get('other_id')
-            issues.append(issue('Duplicate Object Candidate', f, tid, detail, severity='high',
-                                data={'pair': f"{tid}_{other_id}"}))
+            data = {'frame_id': f, 'track_id': tid, 'pair': f"{tid}_{other_id}"}
+            issues.append(issue('Duplicate Track/Frame', f, tid, detail, severity='high',
+                                suggestion='remove_exact_duplicates', data=data))
         elif t == 'switch':
             other_id = err.get('other_id')
+            data = {'a': tid, 'b': other_id, 'from_frame': f, 'source': other_id, 'target': tid, 'pair': f"{tid}_{other_id}"}
             issues.append(issue('ID Switch Candidate', f, tid, detail, severity='high',
-                                data={'pair': f"{tid}_{other_id}"}))
+                                suggestion='swap_ids', data=data))
 
     # Gợi ý nối track (Merge suggestions tương đương CLI watch)
     if body.get('include_merges', True):

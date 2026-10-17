@@ -306,6 +306,7 @@ def open_cvat_job(req, actor):
         labels_set.add(tr.label)
         for fid, b in tr.boxes.items():
             rows.append({
+                "uid": f"cvat_{tid}_{fid}",
                 "track_id": tid,
                 "frame_id": fid,
                 "x": round(b.x1, 1),
@@ -470,3 +471,142 @@ def get_job_frame(job_id, frame_id):
     except Exception as e:
         logger.error("Error retrieving frame %s for job %s from CVAT: %s", frame_id, job_id, e)
         raise
+
+
+def _lerp(a, b, t):
+    return [av + (bv - av) * t for av, bv in zip(a, b)]
+
+
+def _keep_keyframes(points, tolerance=0.5):
+    """Indexes of boxes that must stay keyframes so CVAT's linear interpolation reproduces every box
+    within `tolerance` px (Ramer–Douglas–Peucker over time)."""
+    if len(points) <= 2:
+        return list(range(len(points)))
+    keep = {0, len(points) - 1}
+    stack = [(0, len(points) - 1)]
+    while stack:
+        i, j = stack.pop()
+        (fi, bi), (fj, bj) = points[i], points[j]
+        worst, worst_k = 0.0, -1
+        for k in range(i + 1, j):
+            fk, bk = points[k]
+            expect = _lerp(bi, bj, (fk - fi) / (fj - fi))
+            err = max(abs(e - a) for e, a in zip(expect, bk))
+            if err > worst:
+                worst, worst_k = err, k
+        if worst > tolerance:
+            keep.add(worst_k)
+            stack += [(i, worst_k), (worst_k, j)]
+    return sorted(keep)
+
+
+def boxes_to_cvat(boxes, label_ids, stop_frame):
+    """Convert studio boxes -> CVAT annotations payload with sparse keyframes."""
+    missing = sorted({b['class_name'] for b in boxes} - set(label_ids))
+    if missing:
+        raise ValueError('Job CVAT không có nhãn: ' + ', '.join(missing) + '. Vui lòng thêm nhãn trên CVAT hoặc đổi class.')
+
+    def shape(b, outside=False, keyframe=True):
+        return {
+            'type': 'rectangle',
+            'frame': b['frame_id'],
+            'points': [b['x'], b['y'], b['x'] + b['w'], b['y'] + b['h']],
+            'occluded': bool(b.get('occluded')),
+            'outside': outside,
+            'keyframe': keyframe,
+            'z_order': 0,
+            'rotation': 0,
+            'attributes': []
+        }
+
+    tracks, shapes = [], []
+    by_track = {}
+    for b in boxes:
+        if b.get('track_id', -1) < 0:
+            shapes.append({**shape(b), 'label_id': label_ids[b['class_name']], 'source': 'manual', 'group': 0})
+        else:
+            by_track.setdefault(b['track_id'], []).append(b)
+
+    for tid, group in sorted(by_track.items()):
+        group.sort(key=lambda b: b['frame_id'])
+        classes = {b['class_name'] for b in group}
+        if len(classes) > 1:
+            raise ValueError(f'Track #{tid} có nhiều class ({sorted(classes)}). Hãy đồng nhất class trước khi đẩy lên CVAT.')
+        runs, cur = [], [group[0]]
+        for b in group[1:]:
+            if b['frame_id'] == cur[-1]['frame_id'] + 1:
+                cur.append(b)
+            else:
+                runs.append(cur)
+                cur = [b]
+        runs.append(cur)
+
+        out = []
+        for run in runs:
+            pts = [(b['frame_id'], [b['x'], b['y'], b['x'] + b['w'], b['y'] + b['h']]) for b in run]
+            for k in _keep_keyframes(pts):
+                out.append(shape(run[k]))
+            if run[-1]['frame_id'] < stop_frame:
+                out.append(shape({**run[-1], 'frame_id': run[-1]['frame_id'] + 1}, outside=True))
+
+        tracks.append({
+            'frame': group[0]['frame_id'],
+            'label_id': label_ids[group[0]['class_name']],
+            'group': 0,
+            'source': 'manual',
+            'attributes': [],
+            'shapes': out
+        })
+
+    return {'version': 0, 'tags': [], 'shapes': shapes, 'tracks': tracks}
+
+
+def push_job_annotations(req, actor):
+    """Đẩy annotations sạch từ Studio về lại CVAT với sparse keyframes và sao lưu dữ liệu gốc."""
+    require(actor, "annotator", "reviewer", "admin")
+    job_id = int(req.get("job_id"))
+    boxes = req.get("boxes")
+    if boxes is None:
+        raise ValueError("Không có danh sách bounding boxes để đẩy về CVAT")
+    client = _get_active_client()
+    job = client.jobs.retrieve(job_id)
+    labels = {lbl.name: lbl.id for lbl in job.get_labels()}
+    
+    stop_frame = int(req.get("stop_frame") or job.stop_frame)
+    payload = boxes_to_cvat(boxes, labels, stop_frame)
+    
+    # Sao lưu annotations hiện tại trước khi ghi đè
+    backup_dir = ROOT / "storage" / "cvat_backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime('%Y%m%d-%H%M%S')
+    backup_path = backup_dir / f"job_{job_id}_{ts}.json"
+    
+    try:
+        resp = client.api_client.call_api(
+            f'/api/jobs/{job_id}/annotations', 'GET',
+            header_params={'Accept': 'application/vnd.cvat+json'},
+            _parse_response=False
+        )
+        if resp and resp[1].data:
+            backup_path.write_bytes(resp[1].data)
+    except Exception as exc:
+        logger.warning("Không thể tạo backup CVAT trước khi push: %s", exc)
+        
+    # Ghi đè bằng call_api PUT
+    client.api_client.call_api(
+        f'/api/jobs/{job_id}/annotations', 'PUT',
+        header_params={'Content-Type': 'application/json', 'Accept': 'application/vnd.cvat+json'},
+        body=payload,
+        _parse_response=False
+    )
+    
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "tracks": len(payload['tracks']),
+        "shapes": len(payload['shapes']),
+        "keyframes": sum(len(t['shapes']) for t in payload['tracks']),
+        "backup_file": backup_path.name,
+        "message": f"Đã đẩy thành công {len(payload['tracks'])} tracks (được nén keyframe) về Job #{job_id}. Bản gốc đã sao lưu tại {backup_path.name}."
+    }
+

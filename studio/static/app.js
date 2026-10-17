@@ -6,6 +6,7 @@ const S={boxes:[],meta:{},session:null,issues:[],decisions:{},selectedUid:null,s
          mediaFiles:[],mediaNames:new Map(),mediaToken:null,mediaMode:'none',
          videoToken:null,videoMeta:null,videoError:'',projectId:null,projectName:null,
          user:null,tasks:{},cvatJob:null,
+         zoom:1.0,panX:0,panY:0,panDrag:null,spaceDown:false,
          isCreate:false,drag:null,sourceName:'',lastScan:null,labelsText:'',page:'cvatJobs',report:null};
 let busy=false,toastTimer;
 async function api(path,body={}){
@@ -17,9 +18,54 @@ async function api(path,body={}){
 function toast(text,error=false){const v=el('toast');v.textContent=text;v.className='toast show'+(error?' error':'');clearTimeout(toastTimer);toastTimer=setTimeout(()=>v.className='toast',4400)}
 function setBusy(v){busy=v;el('btnScan').disabled=v||!S.boxes.length;el('btnExport').disabled=v||!S.boxes.length||!canEdit();el('btnDemo').disabled=v||!canEdit();el('btnSaveSession').disabled=v||!S.boxes.length||!canEdit()}
 function deepBoxes(){return S.boxes.map(b=>({...b}))}
+function undoButtons(){const edit=canEdit();if(el('btnUndo'))el('btnUndo').disabled=!edit||!S.undo.length;if(el('btnRedo'))el('btnRedo').disabled=!edit||!S.redo.length}
+function updateZoomBadge(){const z=el('zoomPercent');if(z)z.textContent=`${Math.round(S.zoom*100)}%`}
+function resetZoom(){S.zoom=1.0;S.panX=0;S.panY=0;updateZoomBadge();draw()}
+function zoomAtCenter(factor){const c=el('viewer');if(!c)return;const cx=c.width/2,cy=c.height/2;const wx=(cx-S.panX)/S.zoom,wy=(cy-S.panY)/S.zoom;const newZoom=Math.min(25.0,Math.max(0.4,S.zoom*factor));S.panX=cx-wx*newZoom;S.panY=cy-wy*newZoom;S.zoom=newZoom;updateZoomBadge();draw()}
+let zoomAnimId=null;
+function zoomToBox(b, animate=true){
+ if(!b)return;
+ const {c,sx,sy}=canvasParams();
+ if(!c||!c.width||!c.height)return;
+ const bw=Math.max(14,(b.w||0)*sx);
+ const bh=Math.max(14,(b.h||0)*sy);
+ const centerX=(b.x+(b.w||0)/2)*sx;
+ const centerY=(b.y+(b.h||0)/2)*sy;
+ const targetW=c.width*0.38;
+ const targetH=c.height*0.38;
+ const scaleX=targetW/bw;
+ const scaleY=targetH/bh;
+ const targetZoom=Math.min(8.0,Math.max(1.8,Math.min(scaleX,scaleY)));
+ const targetPanX=c.width/2-targetZoom*centerX;
+ const targetPanY=c.height/2-targetZoom*centerY;
+ if(!animate){
+  S.zoom=targetZoom;S.panX=targetPanX;S.panY=targetPanY;updateZoomBadge();draw();return;
+ }
+ if(zoomAnimId)cancelAnimationFrame(zoomAnimId);
+ const startZoom=S.zoom,startPanX=S.panX,startPanY=S.panY;
+ const startTime=performance.now(),duration=240;
+ function step(now){
+  const elapsed=now-startTime;
+  const progress=Math.min(1.0,elapsed/duration);
+  const ease=1-Math.pow(1-progress,3);
+  S.zoom=startZoom+(targetZoom-startZoom)*ease;
+  S.panX=startPanX+(targetPanX-startPanX)*ease;
+  S.panY=startPanY+(targetPanY-startPanY)*ease;
+  updateZoomBadge();draw();
+  if(progress<1.0){zoomAnimId=requestAnimationFrame(step)}else{zoomAnimId=null}
+ }
+ zoomAnimId=requestAnimationFrame(step);
+}
 function checkpoint(){if(!canEdit())return;S.undo.push(deepBoxes());if(S.undo.length>20)S.undo.shift();S.redo=[];undoButtons()}
-function undoButtons(){el('btnUndo').disabled=!canEdit()||!S.undo.length;el('btnRedo').disabled=!canEdit()||!S.redo.length}
-function indexBoxes(){S.frameMap=new Map();for(const b of S.boxes){if(!S.frameMap.has(b.frame_id))S.frameMap.set(b.frame_id,[]);S.frameMap.get(b.frame_id).push(b)} }
+function indexBoxes(){
+ S.frameMap=new Map();
+ let counter=1;
+ for(const b of S.boxes){
+  if(!b.uid) b.uid=`b_${b.frame_id}_${b.track_id}_${counter++}`;
+  if(!S.frameMap.has(b.frame_id))S.frameMap.set(b.frame_id,[]);
+  S.frameMap.get(b.frame_id).push(b);
+ }
+}
 function resetDecisions(){S.decisions=Object.fromEntries(Object.entries(S.tasks).map(([id,t])=>[id,t.status]));S.selectedIssue=null}
 function readMeta(){const width=Number(el('imageWidth').value),height=Number(el('imageHeight').value),fpsVal=Number(el('fps').value);
  return {...S.meta,width:width>0?width:null,height:height>0?height:null,fps:fpsVal>0?fpsVal:(S.meta.fps||5.0)}}
@@ -41,13 +87,79 @@ function maxFrame(){const arr=S.boxes.map(b=>b.frame_id);return arr.length?Math.
 function minFrame(){const arr=S.boxes.map(b=>b.frame_id);return arr.length?Math.min(...arr):S.frame}
 function timelineBounds(){const start=S.meta.frame_base??minFrame();return {start:Math.min(start,minFrame()),end:Math.max(maxFrame(),start+(S.meta.total_frames||0)-1)}}
 function setFrame(f){const b=timelineBounds();S.frame=Math.max(b.start,Math.min(b.end,Number(f)));el('timeline').value=S.frame;
- el('frameLabel').textContent=`Frame ${S.frame}`;el('frameRange').textContent=`${b.start} – ${b.end}`;selectBox(null);seekVideo();updateMediaStatus();draw();queueProjectSave()}
-function refreshTimeline(){const b=timelineBounds();el('timeline').min=b.start;el('timeline').max=b.end;
- el('timeline').disabled=!S.boxes.length&&!S.videoToken&&!S.mediaFiles.length;el('frameCount').textContent=`${b.end-b.start+1} frames`;
- el('timelineMarks').innerHTML='';
+ el('frameLabel').textContent=`Frame ${S.frame}`;el('frameRange').textContent=`${b.start} – ${b.end}`;selectBox(null);seekVideo();updateMediaStatus();draw();renderFrameBoxes();queueProjectSave()}
+let playInterval=null;
+function togglePlayback(){
+ if(playInterval){
+  clearInterval(playInterval);
+  playInterval=null;
+  if(el('btnPlayPause'))el('btnPlayPause').textContent='▶';
+ } else {
+  const fps=Number(el('playbackFps')?.value||5);
+  if(el('btnPlayPause'))el('btnPlayPause').textContent='⏸';
+  playInterval=setInterval(()=>{
+   const b=timelineBounds();
+   if(S.frame>=b.end)setFrame(b.start);
+   else setFrame(S.frame+1);
+  }, 1000/fps);
+ }
+}
+function refreshTimeline(){
+ const b=timelineBounds();
+ const span=Math.max(1, b.end-b.start);
+ el('timeline').min=b.start;el('timeline').max=b.end;
+ el('timeline').disabled=!S.boxes.length&&!S.videoToken&&!S.mediaFiles.length;
+ el('frameCount').textContent=`${b.end-b.start+1} frames`;
+
+ // 1. Render Coverage Bar (dải mật độ bounding box)
+ const covEl=el('coverageBar');
+ if(covEl){
+  covEl.innerHTML='';
+  if(S.boxes.length){
+   const bucketsCount=Math.min(250, span+1);
+   const filled=new Array(bucketsCount).fill(false);
+   for(const box of S.boxes){
+    const f=box.frame_id;
+    if(f>=b.start && f<=b.end){
+     const idx=Math.min(bucketsCount-1, Math.floor(((f-b.start)/(span+1))*bucketsCount));
+     filled[idx]=true;
+    }
+   }
+   for(let k=0; k<bucketsCount; k++){
+    const bucketDiv=document.createElement('div');
+    bucketDiv.className='cov-bucket'+(filled[k]?' filled':'');
+    covEl.appendChild(bucketDiv);
+   }
+  }
+ }
+
+ // 2. Render Interactive Issue Markers
+ const marksEl=el('timelineMarks');
+ marksEl.innerHTML='';
  if(b.end<=b.start)return;
- const marks=new Map();for(const i of S.issues){const old=marks.get(i.frame);if(!old||({high:3,medium:2,low:1}[i.severity]>({high:3,medium:2,low:1}[old])))marks.set(i.frame,i.severity)}
- [...marks].slice(0,2000).forEach(([f,s])=>{const v=document.createElement('span');v.className=s;v.style.left=`${100*(f-b.start)/(b.end-b.start)}%`;el('timelineMarks').appendChild(v)});
+ 
+ const marksMap=new Map();
+ const sevVal={high:3,medium:2,low:1};
+ for(const i of S.issues){
+  const existing=marksMap.get(i.frame);
+  if(!existing || (sevVal[i.severity]||1) > (sevVal[existing.severity]||1)){
+   marksMap.set(i.frame, i);
+  }
+ }
+
+ [...marksMap.values()].slice(0, 500).forEach(i=>{
+  const btn=document.createElement('button');
+  btn.className=i.severity||'low';
+  btn.style.left=`${(100*(i.frame-b.start)/span)}%`;
+  btn.title=`${i.type} · Frame ${i.frame} · Track #${i.track_id}\n(Bấm để nhảy tới frame này)`;
+  btn.onclick=(ev)=>{
+   ev.stopPropagation();
+   setFrame(i.frame);
+   S.selectedIssue=i.id;
+   renderIssues();
+  };
+  marksEl.appendChild(btn);
+ });
 }
 function metrics(){const tracks=new Set(S.boxes.map(b=>b.track_id));el('metricBoxes').textContent=S.boxes.length.toLocaleString('vi-VN');
  el('metricTracks').textContent=tracks.size.toLocaleString('vi-VN');el('metricIssues').textContent=S.issues.length.toLocaleString('vi-VN');
@@ -55,7 +167,7 @@ function metrics(){const tracks=new Set(S.boxes.map(b=>b.track_id));el('metricBo
  el('issueSubtitle').textContent=S.lastScan?'Cần xác nhận từng issue':'Chưa quét';
  const reviewed=S.issues.filter(i=>S.decisions[i.id]).length;
  el('metricProgress').textContent=S.issues.length?Math.round(100*reviewed/S.issues.length)+'%':'—';
- el('issueCount').textContent=S.issues.length;}
+ el('issueCount').textContent=S.issues.length;if(el('issueCountSub'))el('issueCountSub').textContent=S.issues.length;if(el('frameBoxesBadge'))el('frameBoxesBadge').textContent=(S.frameMap.get(S.frame)||[]).length;}
 function refreshAll(){metrics();refreshTimeline();setFrame(S.frame);renderIssues();setBusy(false)}
 async function loadFile(file){try{
  setBusy(true);
@@ -102,6 +214,7 @@ function clearMedia(){
  const v=el('videoElement');v.pause();v.removeAttribute('src');v.load();
  el('fileImages').value='';el('fileVideo').value='';
  el('imageMapping').value='auto';updateMediaStatus();
+ S.zoom=1.0;S.panX=0;S.panY=0;updateZoomBadge();
 }
 async function chooseVideo(file){
  // Video can be loaded alone for a new project; annotation is optional at import time.
@@ -235,32 +348,68 @@ function imageAtFrame(){if(S.images.has(S.frame))return S.images.get(S.frame);
  if(S.images.size>72)S.images.delete(S.images.keys().next().value);return img}
 function colors(t){const arr=['#51a4fe','#27d1ae','#ffc46a','#e98fff','#7bda65','#f88868','#9eadfa'];let k=(Math.abs(t)*37)%arr.length;return arr[k]}
 function draw(){const {ctx,c,w,h,sx,sy}=canvasParams();ctx.fillStyle='#152139';ctx.fillRect(0,0,c.width,c.height);
+ ctx.save();ctx.translate(S.panX,S.panY);ctx.scale(S.zoom,S.zoom);
  const img=imageAtFrame(),v=el('videoElement');
  if(img&&img.complete&&img.naturalWidth){ctx.drawImage(img,0,0,c.width,c.height)}
  else if(S.videoURL&&v.readyState>=2){try{ctx.drawImage(v,0,0,c.width,c.height)}catch(e){}}
- else {ctx.strokeStyle='#ffffff10';ctx.lineWidth=1;for(let x=0;x<c.width;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,c.height);ctx.stroke()}for(let y=0;y<c.height;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(c.width,y);ctx.stroke()}
+ else {ctx.strokeStyle='#ffffff10';ctx.lineWidth=1/S.zoom;for(let x=0;x<c.width;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,c.height);ctx.stroke()}for(let y=0;y<c.height;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(c.width,y);ctx.stroke()}
    ctx.font='bold 19px system-ui';ctx.fillStyle='#fff';ctx.textAlign='center';
    ctx.fillText(S.videoError?'Không đọc được frame video':S.videoToken?'Đang tải frame video...':S.mediaFiles.length?`Chưa có ảnh cho Frame ${S.frame}`:'Chưa tải ảnh/video của dataset này',c.width/2,c.height/2);ctx.textAlign='left';}
  const rows=S.frameMap.get(S.frame)||[];
- ctx.textBaseline='top';ctx.font='bold 12px system-ui';
- for(const b of rows){const selected=b.uid===S.selectedUid, col=selected?'#fff000':colors(b.track_id);
- const x=b.x*sx,y=b.y*sy,bw=b.w*sx,bh=b.h*sy;
- ctx.strokeStyle=col;ctx.lineWidth=selected?3:1.8;ctx.strokeRect(x,y,bw,bh);
- const text=`#${b.track_id} · ${b.class_name}`;const tw=ctx.measureText(text).width+10;
- ctx.fillStyle=selected?'#edce00':'#152139db';ctx.fillRect(x,Math.max(0,y-21),tw,20);
- ctx.fillStyle=selected?'#182033':col;ctx.fillText(text,x+5,Math.max(0,y-19));
- if(selected){ctx.fillStyle='#fff000';ctx.fillRect(x+bw-5,y+bh-5,10,10)}
+ const labelScale=Math.min(1.4,Math.max(0.6,1/S.zoom));
+ const fontSize=Math.round(12*labelScale);
+ ctx.textBaseline='top';ctx.font=`bold ${fontSize}px system-ui`;
+ const unselected=[], selectedArr=[];
+ for(const b of rows){
+  if(S.selectedUid && b.uid===S.selectedUid) selectedArr.push(b);
+  else unselected.push(b);
  }
- if(S.drag?.type==='create'&&S.drag.preview){const [x,y,bw,bh]=S.drag.preview;ctx.setLineDash([7,5]);ctx.strokeStyle='#66ffcb';ctx.lineWidth=2;ctx.strokeRect(x*sx,y*sy,bw*sx,bh*sy);ctx.setLineDash([])}
+ const drawList=[...unselected, ...selectedArr];
+ for(const b of drawList){const selected=Boolean(S.selectedUid && b.uid && b.uid===S.selectedUid), col=selected?'#fff000':colors(b.track_id);
+ const x=b.x*sx,y=b.y*sy,bw=b.w*sx,bh=b.h*sy;
+ const strokeW=Math.max(1,(selected?3:1.8)/S.zoom);
+ ctx.strokeStyle=col;ctx.lineWidth=strokeW;ctx.strokeRect(x,y,bw,bh);
+ const text=`#${b.track_id} · ${b.class_name}`;const tw=ctx.measureText(text).width+(8*labelScale);
+ const tagH=18*labelScale;
+ if(selected){ctx.shadowColor='rgba(0,0,0,0.55)';ctx.shadowBlur=6/S.zoom;ctx.shadowOffsetY=2/S.zoom}
+ ctx.fillStyle=selected?'#edce00':'#152139db';ctx.fillRect(x,Math.max(0,y-tagH-1),tw,tagH);
+ if(selected){ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0}
+ ctx.fillStyle=selected?'#182033':col;ctx.fillText(text,x+(4*labelScale),Math.max(0,y-tagH));
+ if(selected){const handleSize=Math.max(4,8/S.zoom);ctx.fillStyle='#fff000';ctx.fillRect(x+bw-handleSize/2,y+bh-handleSize/2,handleSize,handleSize)}
+ }
+ if(S.drag?.type==='create'&&S.drag.preview){const [x,y,bw,bh]=S.drag.preview;ctx.setLineDash([7/S.zoom,5/S.zoom]);ctx.strokeStyle='#66ffcb';ctx.lineWidth=2/S.zoom;ctx.strokeRect(x*sx,y*sy,bw*sx,bh*sy);ctx.setLineDash([])}
+ ctx.restore();
  el('canvasMessage').hidden=!!S.boxes.length||!!S.videoToken||!!S.mediaFiles.length;
+ updateZoomBadge();
 }
-function toWorld(evt){const c=el('viewer'),r=c.getBoundingClientRect(),m=canvasParams();return {x:(evt.clientX-r.left)*m.w/r.width,y:(evt.clientY-r.top)*m.h/r.height}}
-function hit(p){const rows=[...(S.frameMap.get(S.frame)||[])].reverse();const m=canvasParams();
- for(const b of rows){const corner=Math.max(6,9/m.sx);if(Math.abs(p.x-(b.x+b.w))<corner&&Math.abs(p.y-(b.y+b.h))<corner)return {box:b,type:'resize'};
+function toWorld(evt){const c=el('viewer'),r=c.getBoundingClientRect(),m=canvasParams();
+ const sx=(evt.clientX-r.left)*(c.width/r.width);
+ const sy=(evt.clientY-r.top)*(c.height/r.height);
+ const cx=(sx-S.panX)/S.zoom;
+ const cy=(sy-S.panY)/S.zoom;
+ return {x:cx*(m.w/c.width),y:cy*(m.h/c.height)};
+}
+function hit(p){const rawRows=S.frameMap.get(S.frame)||[];const m=canvasParams();
+ const corner=Math.max(5,10/(m.sx*S.zoom));
+ const selBox=S.selectedUid?rawRows.find(b=>b.uid===S.selectedUid):null;
+ const otherRows=selBox?rawRows.filter(b=>b.uid!==S.selectedUid).reverse():[...rawRows].reverse();
+ const rows=selBox?[selBox,...otherRows]:otherRows;
+ for(const b of rows){if(Math.abs(p.x-(b.x+b.w))<corner&&Math.abs(p.y-(b.y+b.h))<corner)return {box:b,type:'resize'};
  if(p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h)return {box:b,type:'move'}}return null}
-function selectBox(uid){S.selectedUid=uid;const b=S.boxes.find(x=>x.uid===uid);
- for(const [id,k] of [['fieldUid','uid'],['fieldTrack','track_id'],['fieldClass','class_name'],['fieldX','x'],['fieldY','y'],['fieldW','w'],['fieldH','h']])el(id).value=b?b[k]:'';
- el('btnSaveBox').disabled=!b||!canEdit();el('btnDeleteBox').disabled=!b||!canEdit();el('btnStitch').disabled=!b||!canEdit();el('btnSwap').disabled=!b||!canEdit();draw()}
+function selectBox(uid){S.selectedUid=uid||null;const b=S.selectedUid?S.boxes.find(x=>x.uid===S.selectedUid):null;
+ const edit=canEdit();
+ for(const [id,k] of [['fieldUid','uid'],['fieldTrack','track_id'],['fieldClass','class_name'],['fieldX','x'],['fieldY','y'],['fieldW','w'],['fieldH','h']]){
+   el(id).value=(b&&b[k]!==undefined)?b[k]:'';
+   el(id).disabled=!edit||id==='fieldUid';
+ }
+ for(const id of ['btnSaveBox','btnDeleteBox','btnStitch','btnSwap']){
+   el(id).disabled=!b||!edit;
+   el(id).hidden=!edit;
+ }
+ if(el('boxInspectorHint')){
+   el('boxInspectorHint').textContent=edit?'Thay đổi được kiểm tra xung đột trước khi lưu':'Chế độ Reviewer: Chỉ xem thuộc tính box, không chỉnh sửa trực tiếp';
+ }
+ draw();renderFrameBoxes()}
 async function doFix(action,data,success='Đã cập nhật annotation'){if(!canEdit())return toast('Chỉ Annotator được sửa annotation.',true);try{setBusy(true);const r=await api('fix',{boxes:S.boxes,action,data,session:S.session});checkpoint();S.boxes=r.boxes;
  indexBoxes();resetDecisions();await scan();selectBox(action==='update_box'?data.uid:null);refreshAll();queueProjectSave();toast(success);
  }catch(e){toast(e.message,true)}finally{setBusy(false)}}
@@ -302,6 +451,82 @@ function handoffDialog(i,status){
  }catch(e){toast(e.message,true)}
  }}]);
 }
+
+function switchSideTab(tab){
+ const isIssues=tab==='issues';
+ el('sideTabIssues')?.classList.toggle('active',isIssues);
+ el('sideTabBoxes')?.classList.toggle('active',!isIssues);
+ if(el('sidePaneIssues'))el('sidePaneIssues').hidden=!isIssues;
+ if(el('sidePaneBoxes'))el('sidePaneBoxes').hidden=isIssues;
+ if(!isIssues)renderFrameBoxes();
+}
+function renderFrameBoxes(){
+ const dst=el('frameBoxList');if(!dst)return;
+ const rows=S.frameMap.get(S.frame)||[];
+ const query=(el('frameBoxSearch')?.value||'').trim().toLowerCase();
+ if(el('frameBoxesBadge'))el('frameBoxesBadge').textContent=rows.length;
+ if(el('frameBoxesSubtitle'))el('frameBoxesSubtitle').textContent=`Frame ${S.frame} · ${rows.length} đối tượng (click đúp để zoom)`;
+
+ const filtered=rows.filter(b=>{
+  if(!query)return true;
+  return String(b.track_id).includes(query)||(b.class_name||'').toLowerCase().includes(query);
+ });
+
+ dst.replaceChildren();
+ if(!filtered.length){
+  const empty=document.createElement('div');empty.className='side-empty';
+  empty.textContent=rows.length?'Không có box nào khớp với tìm kiếm.':`Frame ${S.frame} chưa có bounding box nào.`;
+  dst.appendChild(empty);return;
+ }
+
+ for(const b of filtered){
+  const isSelected=Boolean(S.selectedUid&&b.uid===S.selectedUid);
+  const card=document.createElement('div');
+  card.className=`frame-box-card${isSelected?' selected':''}`;
+  card.id=`boxCard_${b.uid}`;
+  const col=colors(b.track_id);
+  const tagsHtml=[
+   b.keyframe?'<span class="box-card-tag">Keyframe</span>':'',
+   b.occluded?'<span class="box-card-tag">Occluded</span>':'',
+   b.outside?'<span class="box-card-tag">Outside</span>':''
+  ].filter(Boolean).join('');
+
+  card.innerHTML=`
+   <div class="box-card-header">
+    <div class="box-card-badge" style="background:${col.stroke}">#${b.track_id}</div>
+    <div class="box-card-class" title="${htmlEscape(b.class_name||'unclassified')}">${htmlEscape(b.class_name||'unclassified')}</div>
+    <div class="box-card-meta">${Math.round(b.w)}×${Math.round(b.h)}</div>
+   </div>
+   <div class="box-card-coords">Pos: (${Math.round(b.x)}, ${Math.round(b.y)}) · UID: ${htmlEscape(String(b.uid).slice(0,8))}</div>
+   ${tagsHtml?`<div class="box-card-tags">${tagsHtml}</div>`:''}
+  `;
+
+  card.title="Click để chọn · Click đúp để zoom tới box";
+  card.onclick=(e)=>{
+   e.stopPropagation();
+   if(e.detail>1)return;
+   if(S.selectedUid===b.uid){
+    selectBox(null);
+   } else {
+    selectBox(b.uid);
+   }
+  };
+  card.ondblclick=(e)=>{
+   e.stopPropagation();
+   selectBox(b.uid);
+   zoomToBox(b, true);
+  };
+  dst.appendChild(card);
+ }
+
+ if(S.selectedUid){
+  const selEl=dst.querySelector('.frame-box-card.selected');
+  if(selEl&&dst.scrollHeight>dst.clientHeight){
+   selEl.scrollIntoView({block:'nearest',behavior:'smooth'});
+  }
+ }
+}
+
 function renderIssues(){
  const dst=el('issueList'),filter=el('issueFilter').value;
  const merged=[...S.issues],seen=new Set(merged.map(i=>i.id));
@@ -326,7 +551,65 @@ function renderIssues(){
   const actions=e.querySelector('.issue-actions');
   const make=(label,cls,fn)=>{const b=document.createElement('button');b.textContent=label;b.className=cls;
    b.onclick=ev=>{ev.stopPropagation();fn()};actions.appendChild(b)};
-  make('◎ Xem frame','',()=>{showPage('workspace');S.selectedIssue=i.id;setFrame(i.frame);renderIssues()});
+  make('◎ Xem frame','',()=>{
+   showPage('workspace');S.selectedIssue=i.id;setFrame(i.frame);
+   const matchBox=(S.frameMap.get(i.frame)||[]).find(b=>b.track_id===i.track_id);
+   selectBox(matchBox?.uid||null);
+   renderIssues();
+  });
+
+  // 1-Click Auto-Fixing Buttons (Chỉ dành cho Annotator và Admin - Reviewer không trực tiếp sửa box)
+  if(canEdit()){
+   const p=i.fix_data||{};
+   if(i.type==='ID Switch Candidate'||i.suggestion==='swap_ids'){
+    let a=p.a||i.track_id;
+    let b=p.b||p.target;
+    if(!b&&p.pair){
+     const parts=String(p.pair).split('_');
+     if(parts.length>=2)b=Number(parts[1]===String(a)?parts[0]:parts[1]);
+    }
+    if(!b&&i.message){
+     const matches=[...i.message.matchAll(/track\s*#?(\d+)/gi)];
+     if(matches.length>=2)b=Number(matches[1][1]);
+     else if(matches.length===1&&Number(matches[0][1])!==a)b=Number(matches[0][1]);
+    }
+    if(a&&b&&Number(a)!==Number(b)){
+     make('⇄ Hoán đổi ID','autofix-swap',()=>{
+      addTextDialog('Hoán đổi Track ID',`Hoán đổi Track #${a} và #${b} từ frame ${i.frame} trở đi?`,()=>
+       doFix('swap_ids',{a,b,from_frame:i.frame},`Đã hoán đổi Track #${a} và #${b}`));
+     });
+     make('⚯ Nối ID','autofix',()=>{
+      addTextDialog('Nối Track ID',`Nối đoạn sau frame ${i.frame} của Track #${b} vào Track #${a}?`,()=>
+       doFix('stitch_ids',{source:b,target:a,from_frame:i.frame},`Đã nối Track #${b} vào #${a}`));
+     });
+    }
+   }else if(i.type==='Gap Frame'||i.suggestion==='interpolate_gap'){
+    let gapLen=(p.to_frame&&p.from_frame)?(p.to_frame-p.from_frame):(p.gap||0);
+    if(!gapLen&&i.message){
+     const m=i.message.match(/gap\s*(\d+)/i);
+     if(m)gapLen=Number(m[1]);
+    }
+    const fromF=p.from_frame!==undefined?Number(p.from_frame):Number(i.frame);
+    const toF=p.to_frame!==undefined?Number(p.to_frame):(fromF+gapLen);
+    if(gapLen>=2&&gapLen<=4){
+     make('⤸ Nội suy gap','autofix',()=>{
+      doFix('interpolate_gap',{track_id:i.track_id,from_frame:fromF,to_frame:toF},`Đã nội suy ${gapLen-1} frame thiếu cho Track #${i.track_id}`);
+     });
+    }
+   }else if(i.type==='Duplicate Track/Frame'||i.type==='Duplicate Object Candidate'||i.suggestion==='remove_exact_duplicates'){
+    make('✕ Xóa box trùng','autofix',()=>{
+     doFix('remove_exact_duplicates',{frame_id:i.frame,track_id:i.track_id},`Đã xóa box trùng tại frame ${i.frame}`);
+    });
+   }else if(i.type==='Class Change'||i.suggestion==='set_class'){
+    const cls=p.class_name||(i.message.match(/expected\s*(\w+)/i)?i.message.match(/expected\s*(\w+)/i)[1]:null);
+    if(cls){
+     make(`✎ Thống nhất class (${cls})`,'autofix',()=>{
+      doFix('set_class',{track_id:i.track_id,class_name:cls},`Đã thống nhất class cho Track #${i.track_id}`);
+     });
+    }
+   }
+  }
+
   if(role()==='reviewer'){
    if(S.cvatJob){
     if(status==='false_positive'){
@@ -334,6 +617,27 @@ function renderIssues(){
     }else{
      make('✓ Bỏ qua (False positive)','reject',()=>{S.decisions[i.id]='false_positive';i.status='false_positive';renderIssues();metrics();toast('Đã đánh dấu bỏ qua issue này khi raise lên CVAT.')});
     }
+    make('✎ Ghi chú issue','outline',()=>{
+     openDialog('Ghi chú issue cho Annotator',`
+      <p style="margin-bottom:8px"><b>Frame ${i.frame} · Track #${i.track_id} (${htmlEscape(i.type)})</b></p>
+      <label>Nội dung mô tả lỗi / Yêu cầu sửa:
+        <textarea id="editIssueComment" rows="3" style="width:100%;margin-top:8px;padding:8px;background:var(--card,#1a2035);color:var(--text,#e5e7eb);border:1px solid #374151;border-radius:6px;resize:vertical;">${htmlEscape(i.message||'')}</textarea>
+      </label>`,[
+       {label:'Hủy',onClick:closeDialog},
+       {label:'Lưu ghi chú',className:'primary',onClick:()=>{
+         const val=el('editIssueComment')?.value?.trim();
+         if(val){
+           i.message=val;
+           if(!S.tasks[i.id])S.tasks[i.id]={};
+           S.tasks[i.id].note=val;
+           S.tasks[i.id].updated_by=S.user?.username||'Reviewer';
+           renderIssues();
+           toast('Đã cập nhật mô tả issue.');
+         }
+         closeDialog();
+       }}
+     ]);
+    });
    }else{
     if(!status||status==='needs_fix'){
      make('↪ Gửi Annotator','fix',()=>handoffDialog(i,'needs_fix'));
@@ -345,7 +649,23 @@ function renderIssues(){
     }
    }
   }else if(canEdit()&&status==='needs_fix')make('✓ Đã sửa · Gửi lại QC','fix',()=>handoffDialog(i,'fixed'));
-  e.onclick=()=>{S.selectedIssue=i.id;setFrame(i.frame);renderIssues()};dst.appendChild(e);
+  e.title="Click để xem · Click đúp để zoom tới đối tượng";
+  e.onclick=()=>{
+   S.selectedIssue=i.id;setFrame(i.frame);
+   const matchBox=(S.frameMap.get(i.frame)||[]).find(b=>b.track_id===i.track_id);
+   selectBox(matchBox?.uid||null);
+   renderIssues();
+  };
+  e.ondblclick=(evt)=>{
+   evt.stopPropagation();
+   S.selectedIssue=i.id;setFrame(i.frame);
+   const matchBox=(S.frameMap.get(i.frame)||[]).find(b=>b.track_id===i.track_id);
+   if(matchBox){
+    selectBox(matchBox.uid);
+    zoomToBox(matchBox, true);
+   }
+   renderIssues();
+  };dst.appendChild(e);
  }
 }
 function showPage(page){
@@ -704,8 +1024,103 @@ async function assignCvatJobDialog(job_id,job){
      const val=el('selectAssigneeUser').value,assignee_id=val?Number(val):null;closeDialog();
      try{setBusy(true);await api('cvat/job/assign',{job_id,assignee:assignee_id});toast(`Đã cập nhật phân công cho Job #${job_id}`);await renderCvatJobs()}
      catch(e){toast(e.message,true)}finally{setBusy(false)}}}]
-  );
- }catch(e){toast(`Lỗi khi lấy danh sách user: ${e.message}`,true)}
+   );
+  }catch(e){toast(`Lỗi khi lấy danh sách user: ${e.message}`,true)}
+ }
+function showBenchmarkResults(r){
+ const targetMet = r.target_met;
+ const precPct = (r.precision * 100).toFixed(1);
+ const recPct = (r.recall * 100).toFixed(1);
+ const f1Pct = (r.f1 * 100).toFixed(1);
+
+ let typeRows = '';
+ for(const [tName, m] of Object.entries(r.by_type || {})){
+  const pStr = (m.precision * 100).toFixed(1) + '%';
+  const rStr = (m.recall * 100).toFixed(1) + '%';
+  const fStr = (m.f1 * 100).toFixed(1) + '%';
+  typeRows += `<tr>
+   <td><b>${htmlEscape(tName)}</b></td>
+   <td>${m.tp}</td>
+   <td>${m.fp}</td>
+   <td>${m.fn}</td>
+   <td>${pStr}</td>
+   <td>${rStr}</td>
+   <td><b>${fStr}</b></td>
+  </tr>`;
+ }
+
+ let missedHtml = '';
+ if(r.missed && r.missed.length){
+  const missedItems = r.missed.slice(0, 50).map(m =>
+   `<li><span class="bm-link" onclick="closeDialog();setFrame(${m.frame});">${htmlEscape(m.type)} (Frame ${m.frame}, Track #${m.track_id})</span>${m.planted ? ` - <i>${htmlEscape(m.planted)}</i>` : ''}</li>`
+  ).join('');
+  missedHtml = `
+   <details style="margin-top:12px;background:#fff1f2;padding:8px 12px;border-radius:6px;border:1px solid #fecdd3">
+    <summary style="font-weight:700;color:#9f1239;cursor:pointer">Bỏ sót (Missed - ${r.missed.length} lỗi) · Bấm xem danh sách</summary>
+    <ul style="margin:8px 0 0;padding-left:20px;font-size:12px;max-height:160px;overflow-y:auto">${missedItems}</ul>
+   </details>
+  `;
+ }
+
+ let falseAlarmHtml = '';
+ if(r.false_alarms && r.false_alarms.length){
+  const faItems = r.false_alarms.slice(0, 50).map(fa =>
+   `<li><span class="bm-link" onclick="closeDialog();setFrame(${fa.frame});">${htmlEscape(fa.type)} (Frame ${fa.frame}, Track #${fa.track_id})</span> - ${htmlEscape(fa.message || '')}</li>`
+  ).join('');
+  falseAlarmHtml = `
+   <details style="margin-top:8px;background:#fefce8;padding:8px 12px;border-radius:6px;border:1px solid #fef08a">
+    <summary style="font-weight:700;color:#854d0e;cursor:pointer">Bắt nhầm (False Alarms - ${r.false_alarms.length} cảnh báo) · Bấm xem danh sách</summary>
+    <ul style="margin:8px 0 0;padding-left:20px;font-size:12px;max-height:160px;overflow-y:auto">${faItems}</ul>
+   </details>
+  `;
+ }
+
+ const content = `
+  <div class="bm-target-banner ${targetMet ? 'pass' : 'fail'}">
+   <span>${targetMet ? '✓ ĐẠT CHUẨN ĐỘ CHÍNH XÁC (Target Met)' : '✕ CHƯA ĐẠT CHUẨN (Below Target)'}</span>
+   <small>Mục tiêu: Precision ≥ 85%, Recall ≥ 80%</small>
+  </div>
+  <div class="bm-summary-grid">
+   <div class="bm-metric-box">
+    <span>Precision (Độ chuẩn)</span>
+    <strong style="color:${r.precision >= 0.85 ? '#15803d' : '#b91c1c'}">${precPct}%</strong>
+    <small style="color:#64748b">${r.tp} / ${r.tp + r.fp}</small>
+   </div>
+   <div class="bm-metric-box">
+    <span>Recall (Độ bao phủ)</span>
+    <strong style="color:${r.recall >= 0.80 ? '#15803d' : '#b91c1c'}">${recPct}%</strong>
+    <small style="color:#64748b">${r.tp} / ${r.tp + r.fn}</small>
+   </div>
+   <div class="bm-metric-box">
+    <span>F1 Score</span>
+    <strong>${f1Pct}%</strong>
+    <small style="color:#64748b">Tol: ±${r.tolerance}f</small>
+   </div>
+  </div>
+  <p style="font-size:12px;color:#475569;margin-bottom:6px">
+   Tổng GT: <b>${r.ground_truth_count}</b> · Dự đoán: <b>${r.predicted_count}</b> ${r.baseline_ignored ? `· Bỏ qua baseline: <b>${r.baseline_ignored}</b>` : ''}
+  </p>
+  <table class="bm-table">
+   <thead>
+    <tr>
+     <th>Loại lỗi</th>
+     <th>TP</th>
+     <th>FP</th>
+     <th>FN</th>
+     <th>Precision</th>
+     <th>Recall</th>
+     <th>F1</th>
+    </tr>
+   </thead>
+   <tbody>
+    ${typeRows || '<tr><td colspan="7">Không có dữ liệu phân loại</td></tr>'}
+   </tbody>
+  </table>
+  ${missedHtml}
+  ${falseAlarmHtml}
+ `;
+
+ openDialog('Kết quả Benchmark Ground Truth', content, [{label:'Đóng', onClick:closeDialog}]);
 }
 function wire(){
  el('navCvatJobs').onclick=()=>{showPage('cvatJobs');renderCvatJobs()};
@@ -713,12 +1128,104 @@ function wire(){
  if(el('cvatStageFilter')) el('cvatStageFilter').onchange=renderCvatJobs;
  el('btnCvatReject').onclick=rejectCvatJobDialog;
  el('btnCvatAccept').onclick=acceptCvatJobDialog;
+ if(el('btnCvatPush')){
+  el('btnCvatPush').onclick=()=>{
+   if(!S.cvatJob)return toast('Không có CVAT Job nào đang mở.',true);
+   if(!canEdit())return toast('Chỉ Annotator hoặc Admin được đẩy nhãn về CVAT.',true);
+   openDialog('☁️ Đẩy nhãn sạch về CVAT',`
+    <p>Đẩy toàn bộ <b>${S.boxes.length} bounding boxes</b> hiện tại về <b>CVAT Job #${S.cvatJob.id}</b>?</p>
+    <ul style="padding-left:20px;margin:8px 0;font-size:12px;color:#475569">
+      <li>Nén keyframe với thuật toán <b>Ramer–Douglas–Peucker (&lt; 0.5px)</b> để giữ đúng các mốc chuyển động mà không làm phình dung lượng.</li>
+      <li>Tự động đánh dấu <code>outside=True</code> sau frame cuối của mỗi run.</li>
+      <li><b>Tự động sao lưu</b> nhãn cũ trên CVAT vào <code>storage/cvat_backups/</code> trước khi ghi đè để bảo đảm an toàn.</li>
+    </ul>
+   `,[
+    {label:'Hủy',onClick:closeDialog},
+    {label:'Xác nhận đẩy lên CVAT',className:'primary',onClick:async()=>{
+      closeDialog();
+      try{
+        setBusy(true);
+        const r=await api('cvat/job/push',{
+          job_id:S.cvatJob.id,
+          boxes:S.boxes,
+          stop_frame:S.cvatJob.stop_frame
+        });
+        toast(r.message||'Đã đẩy thành công về CVAT!');
+      }catch(e){toast(e.message,true)}finally{setBusy(false)}
+    }}
+   ]);
+  };
+ }
+ if(el('btnBenchmarkGT')){
+  el('btnBenchmarkGT').onclick=()=>{
+   if(!S.boxes.length)return toast('Chưa có annotation nào trong workspace để benchmark.',true);
+   openDialog('◎ Benchmark với Ground Truth',`
+    <p style="margin-bottom:10px">So khớp các cảnh báo phát hiện của rule engine với file Ground Truth (chuẩn T021: <b>Precision ≥ 85%, Recall ≥ 80%</b>).</p>
+    <label style="display:block;margin-bottom:8px">
+      <b>File Ground Truth (<code>&lt;video&gt;.truth.json</code> hoặc JSON GT):</b>
+      <input type="file" id="bmGtFile" accept=".json" style="margin-top:4px">
+    </label>
+    <label style="display:block;margin-bottom:8px">
+      <b>File Baseline (Tùy chọn - để loại trừ lỗi đã có từ dữ liệu gốc):</b>
+      <input type="file" id="bmBaseFile" accept=".json" style="margin-top:4px">
+    </label>
+    <div style="display:flex;gap:15px;align-items:center;margin-top:10px">
+      <label style="font-size:12px">Tolerance frame: <input id="bmTol" type="number" min="0" max="10" value="2" style="width:50px"></label>
+      <label style="font-size:12px"><input id="bmOnlyGt" type="checkbox" checked> Chỉ tính các loại lỗi có trong GT</label>
+    </div>
+   `,[
+    {label:'Hủy',onClick:closeDialog},
+    {label:'Chạy Benchmark',className:'primary',onClick:async()=>{
+      const gtInput=el('bmGtFile');
+      if(!gtInput.files.length)return toast('Vui lòng chọn file Ground Truth JSON.',true);
+      try{
+        setBusy(true);
+        const gtText=await gtInput.files[0].text();
+        const gtJson=JSON.parse(gtText);
+        const gtList=Array.isArray(gtJson)?gtJson:(gtJson.ground_truth||[]);
+        
+        let baseList=[];
+        const baseInput=el('bmBaseFile');
+        if(baseInput&&baseInput.files.length){
+          const bText=await baseInput.files[0].text();
+          const bJson=JSON.parse(bText);
+          baseList=Array.isArray(bJson)?bJson:(bJson.ground_truth||bJson.baseline||[]);
+        }
+        
+        const tol=Number(el('bmTol').value||2);
+        const onlyGt=el('bmOnlyGt').checked;
+        
+        const res=await api('benchmark/evaluate',{
+          boxes:S.boxes,
+          ground_truth:gtList,
+          baseline:baseList,
+          tolerance:tol,
+          only_gt_types:onlyGt,
+          meta:readMeta()
+        });
+        
+        showBenchmarkResults(res);
+      }catch(e){toast('Lỗi đọc file hoặc benchmark: '+e.message,true)}finally{setBusy(false)}
+    }}
+   ]);
+  };
+ }
+ if(el('btnPlayPause')) el('btnPlayPause').onclick=togglePlayback;
+ if(el('btnFrameFirst')) el('btnFrameFirst').onclick=()=>setFrame(timelineBounds().start);
+ if(el('btnFrameStepBack')) el('btnFrameStepBack').onclick=()=>setFrame(S.frame-10);
+ if(el('btnFrameStepFwd')) el('btnFrameStepFwd').onclick=()=>setFrame(S.frame+10);
+ if(el('btnFrameLast')) el('btnFrameLast').onclick=()=>setFrame(timelineBounds().end);
+ if(el('playbackFps')) el('playbackFps').onchange=()=>{if(playInterval){togglePlayback();togglePlayback()}};
+
  el('btnAdminUsers').onclick=openUserDialog;el('btnLogout').onclick=async()=>{
  await api('auth/logout').catch(()=>{});location.reload()};
  el('btnSaveSession').onclick=()=>{const data={project_type:'t021_project',version:2,source_name:S.sourceName,meta:readMeta(),boxes:S.boxes,decisions:S.decisions,saved_at:new Date().toISOString()};download('track_qa_session.t021.json',JSON.stringify(data,null,2),'application/json')};
  el('btnCreateProject').onclick=askCreateProject;el('btnSaveProject').onclick=()=>saveProject(false);
  el('btnProjectPageCreate').onclick=askCreateProject;el('navProjects').onclick=async()=>{showPage('projects');await renderProjects()};
- el('btnDemo').onclick=loadDemo;el('btnHelp').onclick=help;el('btnScan').onclick=scan;el('btnExport').onclick=()=>{if(canEdit())exportDialog()};
+ el('btnDemo').onclick=loadDemo;el('btnHelp').onclick=help;el('btnScan').onclick=scan;el('sideTabIssues')?.addEventListener('click',()=>switchSideTab('issues'));
+el('sideTabBoxes')?.addEventListener('click',()=>switchSideTab('boxes'));
+el('frameBoxSearch')?.addEventListener('input',()=>renderFrameBoxes());
+el('btnExport').onclick=()=>{if(canEdit())exportDialog()};
  el('fileAnnotation').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)loadFile(f)};
  el('fileLabels').onchange=async e=>{const f=e.target.files[0];if(f){S.labelsText=await f.text();toast('Đã tải labels.txt. Tải lại MOT để áp dụng class.')}};
  el('fileImages').onchange=e=>{if(e.target.files.length)chooseImages(e.target.files)};
@@ -754,38 +1261,138 @@ function wire(){
  [{label:'Hủy',onClick:closeDialog},{label:'Đánh giá',className:'primary',onClick:async()=>{const f=el('benchmarkFile').files[0];if(!f)return toast('Chọn file JSON benchmark',true);
  try{const data=JSON.parse(await f.text()),r=await api('evaluate',data);closeDialog();openDialog('Kết quả Benchmark',`<p>TP: ${r.tp} · FP: ${r.fp} · FN: ${r.fn}</p><p>Precision: <b>${(100*r.precision).toFixed(1)}%</b> · Recall: <b>${(100*r.recall).toFixed(1)}%</b> · F1: <b>${(100*r.f1).toFixed(1)}%</b></p><p>Mục tiêu: ${r.target_met?'Đạt':'Chưa đạt'}. ${htmlEscape(r.note)}</p>`,[{label:'Đóng',onClick:closeDialog}])}catch(e){toast(e.message,true)}}}]);
  el('dialogClose').onclick=closeDialog;el('dialog').onclick=e=>{if(e.target===el('dialog'))closeDialog()};
- window.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||!el('dialog').hidden)return;
- if(e.key==='ArrowRight')setFrame(S.frame+1);else if(e.key==='ArrowLeft')setFrame(S.frame-1);
- else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();el('btnUndo').click()}});
- const c=el('viewer');c.addEventListener('pointerdown',e=>{if(!S.boxes.length&&!S.isCreate)return;const p=toWorld(e);if(!canEdit()){const selection=hit(p);selectBox(selection?.box?.uid||null);return}c.setPointerCapture(e.pointerId);
- if(S.isCreate){S.drag={type:'create',start:p,preview:[p.x,p.y,0,0]};return}
- const v=hit(p);if(!v){selectBox(null);return}
- selectBox(v.box.uid);S.drag={type:v.type,start:p,orig:{...v.box},preview:null};});
- c.addEventListener('pointermove',e=>{if(!S.drag)return;const p=toWorld(e),d=S.drag;
- if(d.type==='create'){const x=Math.min(d.start.x,p.x),y=Math.min(d.start.y,p.y);d.preview=[x,y,Math.abs(p.x-d.start.x),Math.abs(p.y-d.start.y)];draw();return}
- const b=S.boxes.find(v=>v.uid===d.orig.uid);if(!b)return;
- if(d.type==='move'){b.x=Math.max(0,d.orig.x+p.x-d.start.x);b.y=Math.max(0,d.orig.y+p.y-d.start.y)}
- else if(d.type==='resize'){b.w=Math.max(2,d.orig.w+p.x-d.start.x);b.h=Math.max(2,d.orig.h+p.y-d.start.y)}
- draw();});
- c.addEventListener('pointerup',async e=>{if(!S.drag)return;const d=S.drag;S.drag=null;
- if(d.type==='create'){draw();const [x,y,w,h]=d.preview;if(w<4||h<4)return;
- openDialog('Tạo Bounding Box',`<label>Track ID<input id="newTrack" type="number" value="${S.boxes.reduce((m,b)=>Math.max(m,b.track_id),0)+1}"></label><label>Class<input id="newClass" value="Car"></label>`,
- [{label:'Hủy',onClick:closeDialog},{label:'Tạo box',className:'primary',onClick:()=>{const tid=Number(el('newTrack').value),cls=el('newClass').value;closeDialog();doFix('create_box',{frame_id:S.frame,track_id:tid,x,y,w,h,class_name:cls})}}]);return}
- const box=S.boxes.find(v=>v.uid===d.orig.uid);if(!box)return;
- const moved=JSON.stringify([box.x,box.y,box.w,box.h])!==JSON.stringify([d.orig.x,d.orig.y,d.orig.w,d.orig.h]);
- if(!moved)return;
- const updated={uid:d.orig.uid,x:Math.round(box.x*100)/100,y:Math.round(box.y*100)/100,w:Math.round(box.w*100)/100,h:Math.round(box.h*100)/100};
- Object.assign(box,{x:d.orig.x,y:d.orig.y,w:d.orig.w,h:d.orig.h});
- await doFix('update_box',updated,'Đã cập nhật box sau khi kéo');});
- c.addEventListener('pointercancel',()=>{if(S.drag?.orig){const b=S.boxes.find(x=>x.uid===S.drag.orig.uid);if(b)Object.assign(b,S.drag.orig)}S.drag=null;draw()});
+  window.addEventListener('keydown',e=>{
+   if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||!el('dialog').hidden)return;
+   if(e.code==='Space'&&!e.repeat){S.spaceDown=true;el('viewer')?.classList.add('pan-ready');e.preventDefault();return}
+   if(e.key==='0'||e.code==='Numpad0'||e.key==='r'){resetZoom();return}
+   if(e.key==='+'||e.key==='='||e.code==='NumpadAdd'){zoomAtCenter(1.25);return}
+   if(e.key==='-'||e.key==='_'||e.code==='NumpadSubtract'){zoomAtCenter(1/1.25);return}
+   if(e.key==='ArrowRight')setFrame(S.frame+(e.shiftKey?10:1));
+   else if(e.key==='ArrowLeft')setFrame(S.frame-(e.shiftKey?10:1));
+   else if(e.key==='Home')setFrame(timelineBounds().start);
+   else if(e.key==='End')setFrame(timelineBounds().end);
+   else if(e.key.toLowerCase()==='p')togglePlayback();
+   else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();el('btnUndo').click()}
+  });
+  window.addEventListener('keyup',e=>{
+   if(e.code==='Space'){S.spaceDown=false;el('viewer')?.classList.remove('pan-ready')}
+  });
+  const c=el('viewer');
+  c.addEventListener('contextmenu',e=>e.preventDefault());
+  c.addEventListener('dblclick',e=>{
+    const p=toWorld(e);
+    const v=hit(p);
+    if(v?.box){
+     selectBox(v.box.uid);
+     zoomToBox(v.box, true);
+    } else {
+     resetZoom();
+    }
+   });
+  c.addEventListener('wheel',e=>{
+   e.preventDefault();
+   const r=c.getBoundingClientRect();
+   const clientX=(e.clientX-r.left)*(c.width/r.width);
+   const clientY=(e.clientY-r.top)*(c.height/r.height);
+   const wx=(clientX-S.panX)/S.zoom;
+   const wy=(clientY-S.panY)/S.zoom;
+   const factor=e.deltaY<0?1.18:(1/1.18);
+   const newZoom=Math.min(25.0,Math.max(0.4,S.zoom*factor));
+   S.panX=clientX-wx*newZoom;
+   S.panY=clientY-wy*newZoom;
+   S.zoom=newZoom;
+   draw();
+  },{passive:false});
+
+  if(el('btnZoomIn')) el('btnZoomIn').onclick=()=>zoomAtCenter(1.25);
+  if(el('btnZoomOut')) el('btnZoomOut').onclick=()=>zoomAtCenter(1/1.25);
+  if(el('btnZoomReset')) el('btnZoomReset').onclick=()=>resetZoom();
+  if(el('zoomPercent')) el('zoomPercent').onclick=()=>resetZoom();
+
+  c.addEventListener('pointerdown',e=>{
+   if(!S.boxes.length&&!S.isCreate&&!S.videoToken&&!S.mediaFiles.length)return;
+   const isPanBtn=e.button===1||e.button===2||e.altKey||S.spaceDown;
+   const p=toWorld(e);
+   const v=hit(p);
+   if(isPanBtn||(!canEdit()&&!v)||(canEdit()&&!S.isCreate&&!v)){
+    S.panDrag={startX:e.clientX,startY:e.clientY,origPanX:S.panX,origPanY:S.panY,moved:false,clickEmpty:!isPanBtn&&!v};
+    c.classList.add('panning');
+    c.setPointerCapture(e.pointerId);
+    return;
+   }
+   if(!canEdit()){
+    selectBox(v?.box?.uid||null);
+    S.panDrag={startX:e.clientX,startY:e.clientY,origPanX:S.panX,origPanY:S.panY,moved:false,clickEmpty:false};
+    c.setPointerCapture(e.pointerId);
+    return;
+   }
+   c.setPointerCapture(e.pointerId);
+   if(S.isCreate){S.drag={type:'create',start:p,preview:[p.x,p.y,0,0]};return}
+   if(!v){selectBox(null);return}
+   selectBox(v.box.uid);S.drag={type:v.type,start:p,orig:{...v.box},preview:null};
+  });
+  c.addEventListener('pointermove',e=>{
+   if(S.panDrag){
+    const r=c.getBoundingClientRect();
+    const dx=(e.clientX-S.panDrag.startX)*(c.width/r.width);
+    const dy=(e.clientY-S.panDrag.startY)*(c.height/r.height);
+    if(Math.abs(dx)>2||Math.abs(dy)>2) S.panDrag.moved=true;
+    S.panX=S.panDrag.origPanX+dx;
+    S.panY=S.panDrag.origPanY+dy;
+    draw();
+    return;
+   }
+   if(!S.drag)return;
+   const p=toWorld(e),d=S.drag;
+   if(d.type==='create'){const x=Math.min(d.start.x,p.x),y=Math.min(d.start.y,p.y);d.preview=[x,y,Math.abs(p.x-d.start.x),Math.abs(p.y-d.start.y)];draw();return}
+   const b=S.boxes.find(v=>v.uid===d.orig.uid);if(!b)return;
+   if(d.type==='move'){b.x=Math.max(0,d.orig.x+p.x-d.start.x);b.y=Math.max(0,d.orig.y+p.y-d.start.y)}
+   else if(d.type==='resize'){b.w=Math.max(2,d.orig.w+p.x-d.start.x);b.h=Math.max(2,d.orig.h+p.y-d.start.y)}
+   draw();
+  });
+  c.addEventListener('pointerup',async e=>{
+   if(S.panDrag){
+    const moved=S.panDrag.moved;
+    const clickEmpty=S.panDrag.clickEmpty;
+    S.panDrag=null;
+    c.classList.remove('panning');
+    if(moved)return;
+    if(clickEmpty)selectBox(null);
+    return;
+   }
+   if(!S.drag)return;
+   const d=S.drag;S.drag=null;
+   if(d.type==='create'){draw();const [x,y,w,h]=d.preview;if(w<4||h<4)return;
+   openDialog('Tạo Bounding Box',`<label>Track ID<input id="newTrack" type="number" value="${S.boxes.reduce((m,b)=>Math.max(m,b.track_id),0)+1}"></label><label>Class<input id="newClass" value="Car"></label>`,
+   [{label:'Hủy',onClick:closeDialog},{label:'Tạo box',className:'primary',onClick:()=>{const tid=Number(el('newTrack').value),cls=el('newClass').value;closeDialog();doFix('create_box',{frame_id:S.frame,track_id:tid,x,y,w,h,class_name:cls})}}]);return}
+   const box=S.boxes.find(v=>v.uid===d.orig.uid);if(!box)return;
+   const moved=JSON.stringify([box.x,box.y,box.w,box.h])!==JSON.stringify([d.orig.x,d.orig.y,d.orig.w,d.orig.h]);
+   if(!moved)return;
+   const updated={uid:d.orig.uid,x:Math.round(box.x*100)/100,y:Math.round(box.y*100)/100,w:Math.round(box.w*100)/100,h:Math.round(box.h*100)/100};
+   Object.assign(box,{x:d.orig.x,y:d.orig.y,w:d.orig.h});
+   await doFix('update_box',updated,'Đã cập nhật box sau khi kéo');
+  });
+  c.addEventListener('pointercancel',()=>{
+   if(S.panDrag){S.panDrag=null;c.classList.remove('panning')}
+   if(S.drag?.orig){const b=S.boxes.find(x=>x.uid===S.drag.orig.uid);if(b)Object.assign(b,S.drag.orig)}
+   S.drag=null;draw();
+  });
 }
 function role(){return S.user?.role||''}
-function canEdit(){return role()==='annotator'}
+function canEdit(){return role()==='annotator'||role()==='admin'}
 function updateRoleUI(){
  const edit=canEdit(),admin=role()==='admin',isRev=role()==='reviewer',isAnno=role()==='annotator';
- document.body.classList.toggle('reviewer-mode',!edit);
- if(el('importRoleNotice')) el('importRoleNotice').hidden=role()!=='reviewer';
- if(el('operatorTag')) el('operatorTag').textContent=`${S.user?.username||'—'} · ${role().toUpperCase()}`;
+ document.body.classList.toggle('reviewer-mode',isRev);
+ if(el('importRoleNotice')) el('importRoleNotice').hidden=!isRev;
+ if(el('operatorUsername')){
+  el('operatorUsername').textContent=S.user?.username||'—';
+  el('operatorUsername').title=S.user?.username||'—';
+ }
+ if(el('operatorRoleBadge')){
+  const r=role().toUpperCase();
+  el('operatorRoleBadge').textContent=r||'CHƯA ĐĂNG NHẬP';
+  el('operatorRoleBadge').className=`operator-role-badge role-${role()}`;
+ }
  if(el('btnLogout')) el('btnLogout').hidden=false;
  if(el('btnAdminUsers')) el('btnAdminUsers').hidden=!admin;
 
@@ -796,10 +1403,10 @@ function updateRoleUI(){
  if(el('navReport')) el('navReport').hidden = isAnno;
  if(el('navAudit')) el('navAudit').hidden = isAnno;
 
- // Ẩn các nút offline/demo độc lập tránh gây rối giao diện CVAT pipeline:
+ // Ẩn các nút offline/demo/sửa nhãn đối với Reviewer (không được trực tiếp sửa box):
  for(const id of ['btnCreateProject','btnSaveProject','btnCreateMode','btnSaveBox','btnDeleteBox',
- 'btnStitch','btnSwap','btnUndo','btnRedo','btnExport','btnSaveSession','btnDemo']){
-  const button=el(id);if(button)button.hidden=true;
+ 'btnStitch','btnSwap','btnUndo','btnRedo','btnExport','btnSaveSession','btnDemo','btnCvatPush']){
+  const button=el(id);if(button)button.hidden=!edit;
  }
  for(const id of ['fieldTrack','fieldClass','fieldX','fieldY','fieldW','fieldH']) {
   if(el(id)) el(id).disabled=!edit;
