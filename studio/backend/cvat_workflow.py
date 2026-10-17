@@ -933,7 +933,7 @@ def calibrate_from_jobs(req, actor):
     """
     require(actor, "supervisor", "reviewer", "admin")
     from tools.tune.calibrate_project import (
-        tune_max_speed, tune_switch_params, tune_merge_params
+        tune_gap_params, tune_max_speed, tune_switch_params, tune_merge_params
     )
     from adapters.cvat_api import load_job_tracks
     from core.inject import inject_many
@@ -991,8 +991,8 @@ def calibrate_from_jobs(req, actor):
             clean,
             n_per_type=8,
             seed=jid,
-            drop_range=(max(1, round(2 * k)), max(2, round(8 * k))),
-            gap_range=(max(1, round(2 * k)), max(2, round(6 * k))),
+            drop_range=(max(2, round(2 * k)), max(4, round(8 * k))),
+            gap_range=(max(2, round(2 * k)), max(4, round(6 * k))),
             jump_range=(1.5, 4.0),
         )
         dirty_data[jid] = (dirty, truths)
@@ -1001,25 +1001,25 @@ def calibrate_from_jobs(req, actor):
     with open(base_file, "r", encoding="utf-8") as f:
         base_cfg = yaml.safe_load(f) or {}
 
-    # 4. Chạy tối ưu hóa ngưỡng (Grid search F1-score)
-    opt_speed = tune_max_speed(clean_data, dirty_data, base_cfg, fps)
+    # 4. Chạy tối ưu hóa ngưỡng (Grid search F1-score toàn diện)
+    opt_min_gap, opt_max_gap, opt_skip_occ = tune_gap_params(clean_data, dirty_data, base_cfg, fps)
+    opt_speed, opt_step = tune_max_speed(clean_data, dirty_data, base_cfg, fps)
     opt_sep, opt_ratio = tune_switch_params(clean_data, dirty_data, base_cfg, fps)
-    opt_cost, opt_gap_s = tune_merge_params(clean_data, dirty_data, base_cfg, fps)
+    opt_cost, opt_gap_s, opt_gap_cost = tune_merge_params(clean_data, dirty_data, base_cfg, fps)
 
     # 5. Lưu file cấu hình mới
     tuned_cfg = copy.deepcopy(base_cfg)
     tuned_cfg.setdefault("default", {})
+    tuned_cfg["default"]["min_missing_gap_s"] = opt_min_gap
+    tuned_cfg["default"]["max_missing_gap_s"] = opt_max_gap
+    tuned_cfg["default"]["skip_occluded_gap"] = opt_skip_occ
     tuned_cfg["default"]["max_speed"] = opt_speed
+    tuned_cfg["default"]["max_frame_step_s"] = opt_step
     tuned_cfg["default"]["swap_min_sep"] = opt_sep
     tuned_cfg["default"]["swap_cross_ratio"] = opt_ratio
     tuned_cfg["default"]["merge_max_cost"] = opt_cost
     tuned_cfg["default"]["max_merge_gap_s"] = opt_gap_s
-    # Bảo đảm min_missing_gap_s không nhỏ hơn 2 frame để tránh báo oan xe đi bình thường
-    min_gap_thresh = round(2.0 / fps + 0.05, 2)
-    if tuned_cfg["default"].get("min_missing_gap_s", 0) < min_gap_thresh:
-        tuned_cfg["default"]["min_missing_gap_s"] = min_gap_thresh
-    if "skip_occluded_gap" not in tuned_cfg["default"] or not tuned_cfg["default"]["skip_occluded_gap"]:
-        tuned_cfg["default"]["skip_occluded_gap"] = True
+    tuned_cfg["default"]["merge_gap_cost_s"] = opt_gap_cost
 
     for cls_name in ("car", "truck", "other vehicle"):
         tuned_cfg.setdefault("classes", {}).setdefault(cls_name, {})
@@ -1033,11 +1033,16 @@ def calibrate_from_jobs(req, actor):
         "ok": True,
         "config_file": out_name,
         "parameters": {
+            "min_missing_gap_s": opt_min_gap,
+            "max_missing_gap_s": opt_max_gap,
+            "skip_occluded_gap": opt_skip_occ,
             "max_speed": opt_speed,
+            "max_frame_step_s": opt_step,
             "swap_min_sep": opt_sep,
             "swap_cross_ratio": opt_ratio,
             "merge_max_cost": opt_cost,
             "max_merge_gap_s": opt_gap_s,
+            "merge_gap_cost_s": opt_gap_cost,
         },
         "jobs_used": job_ids,
         "total_tracks": total_tracks,

@@ -44,51 +44,112 @@ def collect_project_jobs(client, project_id, stage_filter="acceptance"):
     return selected_jobs
 
 
-def tune_max_speed(clean_data, dirty_data, base_cfg, fps, speeds=(8.0, 10.0, 12.0, 15.0, 18.0, 20.0, 25.0)):
-    """Tìm max_speed (cỡ box / giây) tối ưu:
+def tune_gap_params(clean_data, dirty_data, base_cfg, fps,
+                    min_gaps=None,
+                    max_gaps=(0.8, 1.0, 1.5, 2.0),
+                    skip_occs=(True,)):
+    """Tìm min_missing_gap_s, max_missing_gap_s và skip_occluded_gap tối ưu.
+    Lưu ý: Không bao giờ xét gap 1 frame vì 1 frame là hiện tượng che khuất tự nhiên,
+    tối thiểu phải từ 2 frame trở lên (min_missing_gap >= 2)."""
+    if min_gaps is None:
+        min_gaps = (round(2.0 / fps, 2), round(2.5 / fps, 2))
+    best_min = round(2.0 / fps, 2)
+    best_max = 1.0
+    best_occ = True
+    best_f1 = -1.0
 
-    Ưu tiên FP trên tập sạch cực thấp (không báo oan), sau đó tối đa hóa Recall trên tập lỗi.
-    """
-    best_speed = 15.0
-    best_score = -1.0
+    logger.info("--- [1/4] Bắt đầu hiệu chỉnh Gap Thresholds (Khoảng trống) ---")
 
-    logger.info("--- [1/3] Bắt đầu hiệu chỉnh max_speed (Jump Threshold) ---")
+    for min_g in min_gaps:
+        for max_g in max_gaps:
+            if max_g <= min_g:
+                continue
+            for occ in skip_occs:
+                cfg = copy.deepcopy(base_cfg)
+                cfg.setdefault("default", {})
+                cfg["default"]["min_missing_gap_s"] = min_g
+                cfg["default"]["max_missing_gap_s"] = max_g
+                cfg["default"]["skip_occluded_gap"] = occ
+                r_cfg = resolve_cfg(cfg, fps)
+
+                tp, fp, fn = 0, 0, 0
+                for jid, clean in clean_data.items():
+                    dirty, truths = dirty_data[jid]
+                    want = {(t["a"], t["frame"]) for t in truths if t["type"] == "gap"}
+
+                    for tr in clean.values():
+                        fp += len(check_gaps(tr, r_cfg))
+
+                    got = {(e["track_id"], e["frame"]) for tr in dirty.values() for e in check_gaps(tr, r_cfg)}
+                    for tid, f in want:
+                        if any(gtid == tid and abs(gf - f) <= 2 for gtid, gf in got):
+                            tp += 1
+                        else:
+                            fn += 1
+
+                prec = tp / max(tp + fp, 1)
+                rec = tp / max(tp + fn, 1)
+                f1 = 2 * prec * rec / max(prec + rec, 1e-6)
+
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_min = min_g
+                    best_max = max_g
+                    best_occ = occ
+
+    logger.info("=> Chọn gap tối ưu: min_missing_gap_s=%.2f, max_missing_gap_s=%.2f, skip_occluded=%s (F1: %.3f)",
+                best_min, best_max, best_occ, best_f1)
+    return best_min, best_max, best_occ
+
+
+def tune_max_speed(clean_data, dirty_data, base_cfg, fps,
+                   speeds=(10.0, 12.0, 13.5, 15.0, 18.0),
+                   frame_steps=(0.3, 0.5, 0.7)):
+    """Tìm max_speed (cỡ box / giây) và max_frame_step_s tối ưu:
+    Tối đa hóa F1-score để vừa bắt trúng Jump vừa tránh cảnh báo nhầm."""
+    best_speed = 13.5
+    best_step = 0.5
+    best_f1 = -1.0
+    best_fp = 999999
+
+    logger.info("--- [2/4] Bắt đầu hiệu chỉnh max_speed & max_frame_step_s (Jump & Bước nhảy) ---")
 
     for sp in speeds:
-        cfg = copy.deepcopy(base_cfg)
-        cfg["default"]["max_speed"] = sp
-        r_cfg = resolve_cfg(cfg, fps)
+        for step_s in frame_steps:
+            cfg = copy.deepcopy(base_cfg)
+            cfg.setdefault("default", {})
+            cfg["default"]["max_speed"] = sp
+            cfg["default"]["max_frame_step_s"] = step_s
+            r_cfg = resolve_cfg(cfg, fps)
 
-        total_fp = 0
-        total_hit = 0
-        total_want = 0
+            tp, fp, fn = 0, 0, 0
+            for jid, clean in clean_data.items():
+                dirty, truths = dirty_data[jid]
+                want = {(t["a"], t["frame"]) for t in truths if t["type"] == "jump"}
 
-        for jid, clean in clean_data.items():
-            dirty, truths = dirty_data[jid]
-            want = {(t["a"], t["frame"]) for t in truths if t["type"] == "jump"}
+                for tr in clean.values():
+                    fp += len(check_jumps(tr, r_cfg))
 
-            # Đếm số cảnh báo trên tập sạch (False Positives)
-            fp = sum(len(check_jumps(tr, r_cfg)) for tr in clean.values())
-            # Đếm số cảnh báo bắt trúng trên tập lỗi (True Positives)
-            got = {(e["track_id"], e["frame"]) for tr in dirty.values() for e in check_jumps(tr, r_cfg)}
+                got = {(e["track_id"], e["frame"]) for tr in dirty.values() for e in check_jumps(tr, r_cfg)}
+                for tid, f in want:
+                    if any(gtid == tid and abs(gf - f) <= 2 for gtid, gf in got):
+                        tp += 1
+                    else:
+                        fn += 1
 
-            total_fp += fp
-            total_want += len(want)
-            total_hit += len(want & got)
+            prec = tp / max(tp + fp, 1)
+            rec = tp / max(tp + fn, 1)
+            f1 = 2 * prec * rec / max(prec + rec, 1e-6)
 
-        recall = total_hit / max(total_want, 1)
-        # Điểm phạt nặng cho False Positive trên tập sạch
-        score = recall - (total_fp * 0.05)
+            if f1 > best_f1 or (f1 == best_f1 and fp < best_fp):
+                best_f1 = f1
+                best_speed = sp
+                best_step = step_s
+                best_fp = fp
 
-        logger.info("  max_speed=%4.1f box/s | Cảnh báo sạch (FP)=%d | Recall jump=%d/%d (%.1f%%)",
-                    sp, total_fp, total_hit, total_want, recall * 100)
-
-        if score > best_score:
-            best_score = score
-            best_speed = sp
-
-    logger.info("=> Chọn max_speed tối ưu: %.1f cỡ box/giây", best_speed)
-    return best_speed
+    logger.info("=> Chọn jump tối ưu: max_speed=%.1f, max_frame_step_s=%.2f (F1: %.3f)",
+                best_speed, best_step, best_f1)
+    return best_speed, best_step
 
 
 def tune_switch_params(clean_data, dirty_data, base_cfg, fps,
@@ -99,11 +160,12 @@ def tune_switch_params(clean_data, dirty_data, base_cfg, fps,
     best_ratio = 0.5
     best_f1 = -1.0
 
-    logger.info("--- [2/3] Bắt đầu hiệu chỉnh Switch Thresholds ---")
+    logger.info("--- [3/4] Bắt đầu hiệu chỉnh Switch Thresholds ---")
 
     for sep in seps:
         for rat in ratios:
             cfg = copy.deepcopy(base_cfg)
+            cfg.setdefault("default", {})
             cfg["default"]["swap_min_sep"] = sep
             cfg["default"]["swap_cross_ratio"] = rat
             r_cfg = resolve_cfg(cfg, fps)
@@ -144,49 +206,53 @@ def tune_switch_params(clean_data, dirty_data, base_cfg, fps,
 
 
 def tune_merge_params(clean_data, dirty_data, base_cfg, fps,
-                      costs=(1.0, 1.4, 1.6, 2.0, 2.5),
-                      gap_s_list=(0.8, 1.0, 1.2, 1.5)):
-    """Tìm merge_max_cost và max_merge_gap_s tối ưu để nối các track đứt."""
-    best_cost = 1.6
-    best_gap_s = 1.0
+                      costs=(1.6, 2.5, 3.5, 4.0),
+                      gap_s_list=(1.0, 1.5, 2.0),
+                      gap_costs=(0.3, 0.5, 1.0)):
+    """Tìm merge_max_cost, max_merge_gap_s, và merge_gap_cost_s tối ưu để nối các track đứt."""
+    best_cost = 3.5
+    best_gap_s = 1.5
+    best_gap_cost = 0.5
     best_f1 = -1.0
 
-    logger.info("--- [3/3] Bắt đầu hiệu chỉnh Merge Thresholds ---")
-
-    # Giả định kích thước khung hình chuẩn của BDD100k là 1280x720
+    logger.info("--- [4/4] Bắt đầu hiệu chỉnh Merge Thresholds (Nối Fragment) ---")
     frame_size = (1280, 720)
 
     for cost in costs:
         for gap_s in gap_s_list:
-            cfg = copy.deepcopy(base_cfg)
-            cfg["default"]["merge_max_cost"] = cost
-            cfg["default"]["max_merge_gap_s"] = gap_s
-            r_cfg = resolve_cfg(cfg, fps)
+            for gap_cost in gap_costs:
+                cfg = copy.deepcopy(base_cfg)
+                cfg.setdefault("default", {})
+                cfg["default"]["merge_max_cost"] = cost
+                cfg["default"]["max_merge_gap_s"] = gap_s
+                cfg["default"]["merge_gap_cost_s"] = gap_cost
+                r_cfg = resolve_cfg(cfg, fps)
 
-            tot_truth = 0
-            tot_tp = 0
-            tot_fp = 0
+                tot_truth = 0
+                tot_tp = 0
+                tot_fp = 0
 
-            for jid, clean in clean_data.items():
-                dirty, truths = dirty_data[jid]
-                res = evaluate_merge(clean, dirty, truths, r_cfg, thresholds=(0.5,), frame_size=frame_size)
-                r = res[0.5]
-                tot_truth += r["truth"]
-                tot_tp += r["tp"]
-                tot_fp += r["fp"]
+                for jid, clean in clean_data.items():
+                    dirty, truths = dirty_data[jid]
+                    res = evaluate_merge(clean, dirty, truths, r_cfg, thresholds=(0.5,), frame_size=frame_size)
+                    r = res[0.5]
+                    tot_truth += r["truth"]
+                    tot_tp += r["tp"]
+                    tot_fp += r["fp"]
 
-            prec = tot_tp / max(tot_tp + tot_fp, 1)
-            rec = tot_tp / max(tot_truth, 1)
-            f1 = 2 * prec * rec / max(prec + rec, 1e-6)
+                prec = tot_tp / max(tot_tp + tot_fp, 1)
+                rec = tot_tp / max(tot_truth, 1)
+                f1 = 2 * prec * rec / max(prec + rec, 1e-6)
 
-            if f1 > best_f1:
-                best_f1 = f1
-                best_cost = cost
-                best_gap_s = gap_s
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_cost = cost
+                    best_gap_s = gap_s
+                    best_gap_cost = gap_cost
 
-    logger.info("=> Chọn merge tối ưu: merge_max_cost=%.1f, max_merge_gap_s=%.1fs (F1: %.3f)",
-                best_cost, best_gap_s, best_f1)
-    return best_cost, best_gap_s
+    logger.info("=> Chọn merge tối ưu: cost=%.1f, max_gap=%.1fs, gap_cost=%.2f (F1: %.3f)",
+                best_cost, best_gap_s, best_gap_cost, best_f1)
+    return best_cost, best_gap_s, best_gap_cost
 
 
 def calibrate_project(client, project_id, job_ids=None, fps=5.0,
@@ -224,8 +290,8 @@ def calibrate_project(client, project_id, job_ids=None, fps=5.0,
             clean,
             n_per_type=8,
             seed=jid,
-            drop_range=(max(1, round(2 * k)), max(2, round(8 * k))),
-            gap_range=(max(1, round(2 * k)), max(2, round(6 * k))),
+            drop_range=(max(2, round(2 * k)), max(4, round(8 * k))),
+            gap_range=(max(2, round(2 * k)), max(4, round(6 * k))),
             jump_range=(1.5, 4.0),
         )
         dirty_data[jid] = (dirty, truths)
@@ -235,18 +301,24 @@ def calibrate_project(client, project_id, job_ids=None, fps=5.0,
         base_cfg = yaml.safe_load(f) or {}
 
     # 4. Chạy Tuning từng nhóm quy luật
-    opt_speed = tune_max_speed(clean_data, dirty_data, base_cfg, fps)
+    opt_min_gap, opt_max_gap, opt_skip_occ = tune_gap_params(clean_data, dirty_data, base_cfg, fps)
+    opt_speed, opt_step = tune_max_speed(clean_data, dirty_data, base_cfg, fps)
     opt_sep, opt_ratio = tune_switch_params(clean_data, dirty_data, base_cfg, fps)
-    opt_cost, opt_gap_s = tune_merge_params(clean_data, dirty_data, base_cfg, fps)
+    opt_cost, opt_gap_s, opt_gap_cost = tune_merge_params(clean_data, dirty_data, base_cfg, fps)
 
     # 5. Tạo cấu hình mới đã được tối ưu
     tuned_cfg = copy.deepcopy(base_cfg)
     tuned_cfg.setdefault("default", {})
+    tuned_cfg["default"]["min_missing_gap_s"] = opt_min_gap
+    tuned_cfg["default"]["max_missing_gap_s"] = opt_max_gap
+    tuned_cfg["default"]["skip_occluded_gap"] = opt_skip_occ
     tuned_cfg["default"]["max_speed"] = opt_speed
+    tuned_cfg["default"]["max_frame_step_s"] = opt_step
     tuned_cfg["default"]["swap_min_sep"] = opt_sep
     tuned_cfg["default"]["swap_cross_ratio"] = opt_ratio
     tuned_cfg["default"]["merge_max_cost"] = opt_cost
     tuned_cfg["default"]["max_merge_gap_s"] = opt_gap_s
+    tuned_cfg["default"]["merge_gap_cost_s"] = opt_gap_cost
 
     # Đồng bộ thông số xe trong classes nếu có
     for cls_name in ("car", "truck", "other vehicle"):
