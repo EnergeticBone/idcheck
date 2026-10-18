@@ -191,3 +191,33 @@ def test_is_horizon_box():
     # Box outside horizon band (foreground: y_center = 600 / 720 = 0.83), small size: 15x15 -> False (don't filter foreground micro-parts!)
     b_small_foreground = Box(1, 100, 590, 115, 605, "car")
     assert is_horizon_box(b_small_foreground, cfg, frame_size) is False
+
+
+def test_gap_detected_with_interpolated_boxes():
+    # Annotator missing frames 10..13 (4 frames), CVAT auto-interpolated them with keyframe=False
+    boxes = {f: Box(f, f, 0, f + 10, 20, "car", keyframe=(f not in (10, 11, 12, 13))) for f in range(0, 30)}
+    tr = Track(1, "car", boxes)
+    errs = check_gaps(tr, CFG)
+    assert len(errs) == 1
+    assert errs[0]["frame"] == 9
+    assert errs[0]["gap"] == 4
+    assert "thiếu 4 frame" in errs[0]["detail"]
+
+
+def test_gap_detected_bdd100k_5fps_config():
+    import yaml
+    from pathlib import Path
+    from core.config import resolve_cfg
+
+    cfg_file = Path(__file__).resolve().parent.parent / "config_project_3.yaml"
+    with open(cfg_file, "r", encoding="utf-8") as f:
+        raw_cfg = yaml.safe_load(f)
+    cfg = resolve_cfg(raw_cfg, fps=5.0)
+
+    # 5 FPS -> min_missing_gap = 1, max_missing_gap = 5
+    # Missing 2 frames: 11, 12
+    tr = mk(1, list(range(0, 11)) + list(range(13, 25)), label="car")
+    errs = check_gaps(tr, cfg)
+    assert len(errs) == 1
+    assert errs[0]["frame"] == 10
+    assert errs[0]["gap"] == 2

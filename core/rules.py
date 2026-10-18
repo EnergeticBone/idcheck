@@ -63,7 +63,14 @@ def check_invalid_boxes(tr, cfg, frame_size=None):
 def check_gaps(tr, cfg):
     p, errs = params(cfg, tr.label), []
     skip_occ = p.get("skip_occluded_gap", True)
-    vis = sorted(f for f, b in tr.boxes.items() if not b.outside)
+    # Nếu track chứa cả keyframe thực lẫn box tự động nội suy (keyframe=False),
+    # kiểm tra gap trên các keyframe thực tế để phát hiện các frame annotator bỏ sót / bị xóa
+    has_interp = any(not getattr(b, "keyframe", True) for b in tr.boxes.values())
+    if has_interp:
+        vis = sorted(f for f, b in tr.boxes.items() if not b.outside and getattr(b, "keyframe", True))
+    else:
+        vis = sorted(f for f, b in tr.boxes.items() if not b.outside)
+
     for a, b in zip(vis, vis[1:]):
         missing = b - a - 1
         if not (p["min_missing_gap"] <= missing <= p["max_missing_gap"]):
@@ -75,6 +82,7 @@ def check_gaps(tr, cfg):
         if skip_occ and (A.occluded or B.occluded):
             continue
         errs.append(dict(type="gap", track_id=tr.id, frame=a,
+                         gap=missing,
                          detail=f"thiếu {missing} frame"))
     return errs
 

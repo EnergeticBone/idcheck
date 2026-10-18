@@ -1,20 +1,20 @@
 default:
-  min_missing_gap_s: 0.45
-  max_missing_gap_s: 0.5
+  min_missing_gap_s: 0.2
+  max_missing_gap_s: 1.0
   max_frame_step_s: 0.1
-  max_merge_gap_s: 0.8
+  max_merge_gap_s: 1.2
   dup_min_s: 0.33
   max_speed: 15.0
-  merge_gap_cost_s: 1.5
+  merge_gap_cost_s: 0.4
   max_scale: 2.2
   dup_iou: 0.7
   dup_min_ratio: 0.6
-  skip_occluded_gap: true
+  skip_occluded_gap: false
   skip_occluded_scale: true
   max_merge_dist: 2.0
   max_merge_scale: 2.0
-  merge_max_cost: 1.6
-  min_merge_track_len: 4
+  merge_max_cost: 2.5
+  min_merge_track_len: 3
   border_margin: 30
   border_penalty: 3.0
   swap_min_disp: 0.0
