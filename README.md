@@ -164,12 +164,21 @@ Lệnh sẽ in ra bảng phân tích chi tiết từng tiêu chí:
 - Chi phí dự đoán vị trí ($cost$) so với ngưỡng $merge\_max\_cost$.
 - Phạt mép biên ($border\_penalty$) nếu cả hai cùng ở sát viền màn hình.
 
----
+## 6. Kiểm Thử Tự Động (Unit & Integration Tests)
 
-## 6. Kiểm Thử Tự Động (Unit Tests)
-
-Bộ kiểm thử bao gồm 47 test case bảo vệ toàn diện các chức năng core, rule, adapter và CLI:
+Bộ kiểm thử bao gồm **81 test cases** bảo vệ toàn diện các chức năng core, rule, adapter, Re-ID, CVAT workflow RBAC và CLI:
 
 ```bash
-python -m pytest
+python -m pytest -v
 ```
+
+---
+
+## 7. Tài Liệu Dự Án (System Documentation)
+
+Hệ thống cung cấp bộ tài liệu kỹ thuật toàn diện trong thư mục `docs/`:
+
+1. 🏛️ **[Sơ Đồ Kiến Trúc Hệ Thống (docs/ARCHITECTURE.md)](docs/ARCHITECTURE.md)**: Sơ đồ kiến trúc phân tầng (Mermaid), luồng dữ liệu, quy trình phân quyền Annotator/Reviewer, đường ống xử lý lỗi và topo triển khai hạ tầng.
+2. 📐 **[Đặc Tả Yêu Cầu & Thiết Kế Kỹ Thuật (docs/SPECIFICATION_AND_DESIGN.md)](docs/SPECIFICATION_AND_DESIGN.md)**: Đặc tả chi tiết các yêu cầu chức năng (FR-01 đến FR-13), yêu cầu phi chức năng (NFR), mô hình toán học lõi (Hungarian matching, Camera compensation, Deep Re-ID, Horizon filter) và thiết kế giao diện Studio.
+3. 🧪 **[Tài Liệu Kiểm Thử & Đảm Bảo Chất Lượng (docs/TESTING.md)](docs/TESTING.md)**: Tháp kiểm thử, ma trận chi tiết 81 ca test tự động, báo cáo kiểm thử thực địa trên 5 Task CVAT thực tế (BDD100K Tasks #36 - #40) và tiêu chí nghiệm thu (Quality Gate).
+
