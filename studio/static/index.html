@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>idcheck QA Studio · Track Consistency & Quality Gate</title><link rel="stylesheet" href="style.css?v=5.5-tune-thresholds-fix"></head> 
+<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>idcheck QA Studio · Track Consistency & Quality Gate</title><link rel="stylesheet" href="style.css?v=6.4-fix-issue-scroll"></head> 
 <body>
 <div class="shell">
   <aside class="sidebar">
@@ -17,7 +17,7 @@
     <button class="nav" id="navReport"><span>▤</span> QA Report</button>
     <button class="nav" id="navAudit"><span>⟳</span> Audit History</button>
     <div class="sidebar-footer">
-      <button id="btnBenchmarkGT" class="sidebar-tool-btn" title="So khớp lỗi phát hiện với Ground Truth (<video>.truth.json) và tính Precision/Recall/F1">
+      <button id="btnBenchmarkGT" class="sidebar-tool-btn" title="So khớp lỗi phát hiện với Ground Truth (<video>.truth.json) và tính Precision/Recall/F1" hidden>
         <span>◎</span> Benchmark GT
       </button>
       <div class="sidebar-user-box">
@@ -178,6 +178,7 @@
                 <select id="issueFilter">
                   <option value="all">Tất cả lỗi</option>
                   <option value="manual">✍️ Reviewer tự raise</option>
+                  <option value="cvat">🏷️ Issue từ CVAT</option>
                   <option value="open">Chưa review / Cần xử lý</option>
                   <option value="handoff">Cần Annotator sửa</option>
                   <option value="fixed">Chờ Reviewer xác nhận</option>
@@ -257,7 +258,7 @@
                 <option value="config_base.yaml">config_base.yaml (Mặc định)</option>
               </select>
             </div>
-            <button id="btnTuneThresholds" class="outline small btn-tune-pulse" title="Tự động tối ưu hóa ngưỡng dựa trên các Job đã nghiệm thu (Ground Truth)">⚙ Tune ngưỡng</button>
+            <button id="btnTuneThresholds" class="outline small btn-tune-pulse" title="Tự động tối ưu hóa ngưỡng dựa trên các Job đã nghiệm thu (Ground Truth)" hidden>⚙ Tune ngưỡng</button>
             <div id="cvatStatusSummary" class="cvat-status-summary">Đang kết nối CVAT...</div>
           </div>
         </div>
@@ -266,7 +267,7 @@
         </div>
       </div>
     </section>
-    <section class="report-page" id="reportPage" hidden><div class="page-card"><div class="pane-head"><h2>Quality Assurance Report</h2><div><button class="outline" id="btnSaveReport">↧ Tải báo cáo JSON</button><button class="primary" id="btnBenchmark">◎ Benchmark JSON</button></div></div><div id="reportContent" class="report-body"></div></div></section>
+    <section class="report-page" id="reportPage" hidden><div class="page-card"><div class="pane-head"><h2>Quality Assurance Report</h2><div><button class="outline" id="btnSaveReport">↧ Tải báo cáo JSON</button><button class="primary" id="btnBenchmark" hidden>◎ Benchmark JSON</button></div></div><div id="reportContent" class="report-body"></div></div></section>
     <section class="report-page" id="auditPage" hidden><div class="page-card"><div class="pane-head"><h2>Audit History</h2><button class="outline" id="btnRefreshAudit">↻ Làm mới</button></div><p>Lịch sử reviewer của phiên làm việc hiện tại, lưu cục bộ tại máy chạy server.</p><div id="auditContent" class="report-body"></div></div></section>
     <footer> idcheck QA Studio · Powered by Hungarian bipartite matching, camera compensation, spike filter & geometry validation. </footer>
   </main>
@@ -274,5 +275,5 @@
 <div id="authGate" class="auth-gate"><div class="auth-card"><h2>Đăng nhập bằng tài khoản CVAT</h2><p id="authDescription">Đang kiểm tra kết nối CVAT...</p><form id="authForm"><label>Tên tài khoản CVAT<input id="authUsername" required autocomplete="username" minlength="2" placeholder="Ví dụ: Nguyen_Dang_Huan, BOT, ..."></label><label>Mật khẩu CVAT<input id="authPassword" required type="password" autocomplete="current-password" minlength="4"></label><button class="primary" type="submit" id="authSubmit">Đăng nhập qua CVAT</button></form><p id="authMessage"></p><small>Sử dụng tài khoản CVAT (cvat.trantuli.id.vn). Tự động đồng bộ vai trò (Admin / Reviewer / Annotator) và danh sách jobs.</small></div></div><div class="toast" id="toast" role="status"></div>
 <div class="modal-bg" id="dialog" hidden><div class="modal"><div class="modal-head"><h2 id="dialogTitle">Thông tin</h2><button id="dialogClose" class="ghost">✕</button></div><div id="dialogContent" class="modal-content"></div><div class="modal-buttons" id="dialogButtons"></div></div></div>
 <video id="videoElement" muted preload="auto" playsinline hidden></video>
-<script src="app.js?v=5.9-qc-transition-fix" defer></script>
+<script src="app.js?v=6.6-annotator-no-scan-zoom-fix" defer></script>
 </body></html>

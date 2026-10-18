@@ -116,7 +116,8 @@ class Handler(SimpleHTTPRequestHandler):
         cvat_routes={'/api/cvat/jobs','/api/cvat/job/submit-validation','/api/cvat/job/open',
                      '/api/cvat/organizations','/api/cvat/organization/set',
                      '/api/cvat/job/reject-and-raise','/api/cvat/job/raise-issue','/api/cvat/job/accept','/api/cvat/job/assign',
-                     '/api/cvat/users','/api/cvat/job/push','/api/cvat/configs','/api/cvat/calibrate'}
+                     '/api/cvat/users','/api/cvat/job/push','/api/cvat/configs','/api/cvat/calibrate',
+                     '/api/cvat/issue/status'}
         benchmark_routes={'/api/benchmark/evaluate'}
         if route not in ('/api/media/upload-zip','/api/video/upload','/api/annotation/import') and route not in ROUTES and route not in PROJECT_ROUTES and route not in auth_routes and route not in workflow_routes and route not in cvat_routes and route not in benchmark_routes:
             return self.json({'error':'Không tìm thấy API'},404)
@@ -168,7 +169,9 @@ class Handler(SimpleHTTPRequestHandler):
             if route=='/api/cvat/organizations':return self.json(cvat_workflow.list_organizations(actor))
             if route=='/api/cvat/organization/set':return self.json(cvat_workflow.set_active_organization(req, actor))
             if route=='/api/cvat/configs':return self.json(cvat_workflow.list_configs())
-            if route=='/api/cvat/calibrate':return self.json(cvat_workflow.calibrate_from_jobs(req, actor))
+            if route=='/api/cvat/calibrate':
+                auth.require(actor,'admin')
+                return self.json(cvat_workflow.calibrate_from_jobs(req, actor))
             if route=='/api/cvat/job/submit-validation':return self.json(cvat_workflow.submit_for_validation(req,actor))
             if route=='/api/cvat/job/open':return self.json(cvat_workflow.open_cvat_job(req,actor))
             if route=='/api/cvat/job/reject-and-raise':return self.json(cvat_workflow.reject_and_raise_issues(req,actor))
@@ -177,7 +180,12 @@ class Handler(SimpleHTTPRequestHandler):
             if route=='/api/cvat/job/assign':return self.json(cvat_workflow.assign_job(req,actor))
             if route=='/api/cvat/users':return self.json(cvat_workflow.list_cvat_users(actor))
             if route=='/api/cvat/job/push':return self.json(cvat_workflow.push_job_annotations(req,actor))
-            if route=='/api/benchmark/evaluate':return self.json(benchmark.evaluate(req,actor))
+            if route=='/api/cvat/issue/status':return self.json(cvat_workflow.update_cvat_issue_status(req,actor))
+            if route in ('/api/benchmark/evaluate', '/api/evaluate'):
+                auth.require(actor,'admin')
+                if route=='/api/benchmark/evaluate':
+                    return self.json(benchmark.evaluate(req,actor))
+                return self.json(ROUTES['/api/evaluate'](req))
             if route=='/api/fix':auth.require(actor,'annotator','reviewer','admin')
             if route=='/api/review':raise ValueError('Dùng /api/workflow/transition để QC và chuyển lỗi cho Annotator')
             if route in ('/api/projects/create','/api/projects/save'):auth.require(actor,'annotator','reviewer','admin')

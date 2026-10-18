@@ -12,6 +12,7 @@ class Box:
     outside: bool = False
     occluded: bool = False
     keyframe: bool = True
+    attributes: list = field(default_factory=list)
 
 
 @dataclass
@@ -19,6 +20,7 @@ class Track:
     id: int
     label: str
     boxes: dict = field(default_factory=dict)   # frame -> Box
+    attributes: list = field(default_factory=list)
 
     @property
     def start(self):

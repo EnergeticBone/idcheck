@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import urllib3
 from cvat_sdk.core.client import Client, Config
@@ -88,7 +89,15 @@ def load_job_tracks(client, job_id, interpolate=True, use_client_id=True):
 
         label_id = lt.label_id
         label_name = labels.get(label_id, str(label_id))
-        track = Track(id=tid, label=label_name)
+        track_attrs = []
+        if hasattr(lt, "attributes") and lt.attributes:
+            for a in lt.attributes:
+                if hasattr(a, "spec_id") and hasattr(a, "value"):
+                    track_attrs.append({"spec_id": a.spec_id, "value": a.value})
+                elif isinstance(a, dict):
+                    track_attrs.append(a)
+
+        track = Track(id=tid, label=label_name, attributes=track_attrs)
 
         boxes = {}
         for shape in lt.shapes:
@@ -102,6 +111,14 @@ def load_job_tracks(client, job_id, interpolate=True, use_client_id=True):
             outside = bool(shape.outside)
             occluded = bool(shape.occluded)
 
+            shape_attrs = []
+            if hasattr(shape, "attributes") and shape.attributes:
+                for a in shape.attributes:
+                    if hasattr(a, "spec_id") and hasattr(a, "value"):
+                        shape_attrs.append({"spec_id": a.spec_id, "value": a.value})
+                    elif isinstance(a, dict):
+                        shape_attrs.append(a)
+
             boxes[f] = Box(
                 frame=f,
                 x1=x1,
@@ -112,6 +129,7 @@ def load_job_tracks(client, job_id, interpolate=True, use_client_id=True):
                 outside=outside,
                 occluded=occluded,
                 keyframe=True,
+                attributes=shape_attrs,
             )
 
         if interpolate and len(boxes) > 1:
@@ -129,13 +147,22 @@ def format_alert_message(alert):
     type_str = alert.get("type", "alert").upper()
     tid = alert.get("track_id")
     other = alert.get("other_id")
-    if other is not None:
+    detail = str(alert.get("detail", "")).strip()
+
+    # Làm sạch tiền tố trùng lặp nếu detail đã được format trước đó
+    detail = re.sub(r'^(?:\[CVAT_ISSUE\]\s*(?:Track:?\s*)?)+', '', detail, flags=re.IGNORECASE).strip()
+
+    # Nếu detail đã có tiền tố chuẩn [TYPE] Track #... thì tránh bọc lặp lại
+    if detail.startswith(f"[{type_str}]"):
+        return detail
+
+    if other is not None and other != tid:
         target = f"Track #{tid} & #{other}"
     elif tid is not None:
         target = f"Track #{tid}"
     else:
         target = "Track"
-    detail = alert.get("detail", "")
+
     return f"[{type_str}] {target}: {detail}"
 
 
@@ -143,14 +170,29 @@ def _get_alert_box_position(alert, tracks):
     """Tìm bounding box [x1, y1, x2, y2] phù hợp nhất tại frame lỗi."""
     f = alert.get("frame", 0)
     tid = alert.get("track_id")
-    if tracks and tid in tracks and tracks[tid].boxes:
-        tr = tracks[tid]
-        if f in tr.boxes:
-            b = tr.boxes[f]
+    if tid is not None:
+        try:
+            tid = int(tid)
+        except (ValueError, TypeError):
+            pass
+    if tid is None and alert.get("detail"):
+        m = re.search(r'Track\s*#?(\d+)', str(alert.get("detail", "")))
+        if m:
+            try:
+                tid = int(m.group(1))
+            except ValueError:
+                pass
+
+    if tracks and tid is not None:
+        # Hỗ trợ cả key int lẫn str trong dict tracks
+        tr = tracks.get(tid) or tracks.get(str(tid))
+        if tr and getattr(tr, "boxes", None):
+            if f in tr.boxes:
+                b = tr.boxes[f]
+                return [round(b.x1, 1), round(b.y1, 1), round(b.x2, 1), round(b.y2, 1)]
+            nearest_f = min(tr.boxes.keys(), key=lambda frame: abs(frame - f))
+            b = tr.boxes[nearest_f]
             return [round(b.x1, 1), round(b.y1, 1), round(b.x2, 1), round(b.y2, 1)]
-        nearest_f = min(tr.boxes.keys(), key=lambda frame: abs(frame - f))
-        b = tr.boxes[nearest_f]
-        return [round(b.x1, 1), round(b.y1, 1), round(b.x2, 1), round(b.y2, 1)]
     return [0.0, 0.0, 100.0, 100.0]
 
 

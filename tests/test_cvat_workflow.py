@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from studio.backend import cvat_workflow
+from core.schema import Box, Track
 
 
 class DummyUser:
@@ -288,12 +289,16 @@ def test_auto_tune_and_configs(tmp_path):
     assert "configs" in configs
     assert any("config_base.yaml" in c for c in configs["configs"])
 
-    # 2. Test calibrate_from_jobs permission check
+    # 2. Test calibrate_from_jobs permission check (admin only)
     worker = {"username": "annotator_cuong", "role": "worker"}
-    supervisor = {"username": "qa_lead", "role": "supervisor"}
+    reviewer = {"username": "qa_lead", "role": "reviewer"}
+    admin = {"username": "admin_owner", "role": "admin"}
 
     with pytest.raises(PermissionError):
         cvat_workflow.calibrate_from_jobs({"job_ids": [7]}, worker)
+
+    with pytest.raises(PermissionError):
+        cvat_workflow.calibrate_from_jobs({"job_ids": [7]}, reviewer)
 
     # 3. Test calibrate_from_jobs execution with synthetic ground truth
     dummy_tracks = [
@@ -322,7 +327,7 @@ def test_auto_tune_and_configs(tmp_path):
                 "project_name": "BDD100k_Test",
                 "fps": 5.0,
                 "out_name": out_file
-            }, supervisor)
+            }, admin)
 
             assert res["ok"] is True
             assert res["config_file"] == out_file
@@ -381,4 +386,207 @@ def test_raise_single_issue():
         assert "Box nhảy bất thường" in res2["alert"]["detail"]
 
 
+def test_accept_job_quality_gate():
+    mock_client = MagicMock()
+    job = DummyJob(10, 100, stage="validation", state="completed")
+    mock_client.jobs.retrieve.return_value = job
+
+    reviewer = {"username": "reviewer_qc", "role": "reviewer"}
+    admin = {"username": "admin_lead", "role": "admin"}
+
+    issues_with_blocker = [
+        {"type": "ID Switch", "frame": 5, "severity": "high", "message": "Critical ID swap"},
+        {"type": "Box Jump", "frame": 10, "severity": "low", "message": "Minor jitter"},
+    ]
+
+    with patch.object(cvat_workflow, "_get_active_client", return_value=mock_client), \
+         patch.object(cvat_workflow, "_load_job_meta", return_value={}):
+
+        # 1. Reviewer tries to accept with unresolved blocker -> Blocked by Quality Gate
+        with pytest.raises(ValueError, match="Chốt chặn Quality Gate"):
+            cvat_workflow.accept_job({"job_id": 10, "issues": issues_with_blocker}, reviewer)
+
+        # 2. Admin tries to accept with blocker but without override reason -> Error
+        with pytest.raises(ValueError, match="lý do phê duyệt ngoại lệ"):
+            cvat_workflow.accept_job({"job_id": 10, "issues": issues_with_blocker, "override": True}, admin)
+
+        # 3. Admin accepts with override reason -> Succeeded with override recorded
+        res = cvat_workflow.accept_job({
+            "job_id": 10,
+            "issues": issues_with_blocker,
+            "override": True,
+            "override_reason": "Khách hàng xác nhận ngoại lệ nghiệp vụ"
+        }, admin)
+        assert res["ok"] is True
+        assert res["stage"] == "acceptance"
+        assert "ngoại lệ từ Admin" in res["message"]
+
+
+def test_push_annotations_stage_guard():
+    mock_client = MagicMock()
+    job_val = DummyJob(11, 100, stage="validation", state="completed")
+    mock_lbl = MagicMock()
+    mock_lbl.id = 1
+    mock_lbl.name = "Car"
+    job_val.get_labels = MagicMock(return_value=[mock_lbl])
+    mock_client.jobs.retrieve.return_value = job_val
+
+    annotator = {"username": "annotator_1", "role": "annotator"}
+    admin = {"username": "admin_lead", "role": "admin"}
+
+    boxes = [{"frame_id": 0, "track_id": 1, "x": 10, "y": 10, "w": 20, "h": 20, "class_name": "Car"}]
+
+    with patch.object(cvat_workflow, "_get_active_client", return_value=mock_client):
+        # Annotator cannot push when job is in validation stage
+        with pytest.raises(PermissionError, match="Không thể đẩy nhãn khi Job đang ở giai đoạn 'validation'"):
+            cvat_workflow.push_job_annotations({"job_id": 11, "boxes": boxes}, annotator)
+
+        # Admin can push
+        mock_client.api_client.call_api.return_value = (None, MagicMock(data=b'{}'))
+        res = cvat_workflow.push_job_annotations({"job_id": 11, "boxes": boxes}, admin)
+        assert res["ok"] is True
+
+
+def test_boxes_to_cvat_attributes_preservation():
+    shape_attrs = [{"spec_id": 10, "value": "parked"}]
+    track_attrs = [{"spec_id": 20, "value": "truck"}]
+
+    boxes = [
+        {
+            "frame_id": 0, "track_id": 1, "x": 10, "y": 10, "w": 20, "h": 20,
+            "class_name": "Car", "attributes": shape_attrs, "track_attributes": track_attrs
+        },
+        {
+            "frame_id": 1, "track_id": 1, "x": 12, "y": 12, "w": 20, "h": 20,
+            "class_name": "Car", "attributes": shape_attrs, "track_attributes": track_attrs
+        }
+    ]
+    label_ids = {"Car": 1}
+    payload = cvat_workflow.boxes_to_cvat(boxes, label_ids, stop_frame=5)
+
+    track = payload["tracks"][0]
+    assert track["attributes"] == track_attrs
+    shape = track["shapes"][0]
+    assert shape["attributes"] == shape_attrs
+
+
+def test_update_cvat_issue_status():
+    mock_client = MagicMock()
+    mock_issue = MagicMock()
+    mock_issue.id = 42
+    mock_issue.resolved = True
+    mock_client.issues.retrieve.return_value = mock_issue
+
+    mock_comment = MagicMock()
+    mock_comment.id = 101
+    mock_client.comments.create.return_value = mock_comment
+
+    with patch.object(cvat_workflow, "_get_active_client", return_value=mock_client):
+        req = {
+            "job_id": 5,
+            "issue_id": 42,
+            "resolved": True,
+            "comment": "Đã sửa xong box lệch"
+        }
+        actor = {"username": "annotator_1", "role": "annotator"}
+        res = cvat_workflow.update_cvat_issue_status(req, actor)
+
+        assert res["ok"] is True
+        assert res["resolved"] is True
+        mock_issue.update.assert_called_with({"resolved": True})
+        mock_client.comments.create.assert_called_with({"issue": 42, "message": "Đã sửa xong box lệch"})
+        assert res["comment"]["message"] == "Đã sửa xong box lệch"
+def test_open_cvat_job_annotator_only_gets_cvat_issues():
+    mock_client = MagicMock()
+    mock_job = DummyJob(37, 100, stage="annotation", state="rejected", assignee=DummyUser(10, "Tran_Dinh_Cuong"))
+    mock_client.jobs.retrieve.return_value = mock_job
+
+    dummy_tracks = {
+        1: MagicMock(label="Car", boxes={
+            0: MagicMock(x1=10, y1=10, x2=20, y2=20, outside=False, occluded=False, keyframe=True, label="Car")
+        })
+    }
+    dummy_meta = {"frame_size": (1280, 720)}
+    dummy_cvat_issues = [
+        {"id": "cvat_issue:250", "cvat_issue_id": 250, "frame": 86, "message": "Box jump", "resolved": False, "is_cvat_issue": True}
+    ]
+    dummy_scan_res = {
+        "issues": [{"id": "scan_1", "type": "Gap Frame", "frame": 5}] * 93,
+        "count": 93,
+        "counts": {"Gap Frame": 93},
+        "stats": {}
+    }
+
+    with patch.object(cvat_workflow, "_get_active_client", return_value=mock_client), \
+         patch.object(cvat_workflow, "load_job_tracks", return_value=(dummy_tracks, dummy_meta)), \
+         patch.object(cvat_workflow, "fetch_job_issues", return_value=dummy_cvat_issues), \
+         patch.object(cvat_workflow, "scan", return_value=dummy_scan_res) as mock_scan:
+
+        # 1. Annotator mở job -> CHỈ nhận 1 CVAT issue, KHÔNG chạy hàm scan()
+        res_anno = cvat_workflow.open_cvat_job({"job_id": 37}, {"username": "Tran_Dinh_Cuong", "role": "annotator"})
+        assert res_anno["effective_role"] == "annotator"
+        assert len(res_anno["issues"]) == 1
+        assert res_anno["count"] == 1
+        assert res_anno["issues"][0]["cvat_issue_id"] == 250
+        mock_scan.assert_not_called()
+
+        # 2. Reviewer mở job khi ở stage validation -> Chạy scan để nhận toàn bộ 93 scan issues kiểm định
+        mock_job.stage = "validation"
+        res_rev = cvat_workflow.open_cvat_job({"job_id": 37}, {"username": "MinhHoang-123", "role": "reviewer"})
+        assert res_rev["effective_role"] == "reviewer"
+        assert len(res_rev["issues"]) == 93
+        assert res_rev["count"] == 93
+        mock_scan.assert_called_once()
+
+        # 3. Admin mở job -> Luôn chạy scan để giám sát
+        res_admin = cvat_workflow.open_cvat_job({"job_id": 37}, {"username": "admin_lead", "role": "admin"})
+        assert res_admin["effective_role"] == "admin"
+        assert len(res_admin["issues"]) == 93
+
+
+def test_fetch_job_issues_parsing_and_box_resolution():
+    mock_job = MagicMock()
+    mock_iss = MagicMock()
+    mock_iss.id = 318
+    mock_iss.frame = 7
+    mock_iss.position = [0.0, 0.0, 100.0, 100.0]
+    mock_iss.resolved = False
+    mock_comment = MagicMock()
+    mock_comment.author = MagicMock(username="Reviewer_Bot")
+    mock_comment.message = "[CVAT_ISSUE] Track: [CVAT_ISSUE] Track: [ID_SWITCH_CANDIDATE] Track #12 & #12: nghi hoán ID giữa track 12 và 13"
+    mock_comment.created_date = "2026-10-18T10:00:00Z"
+    mock_iss.get_comments.return_value = [mock_comment]
+    mock_job.get_issues.return_value = [mock_iss]
+
+    issues = cvat_workflow.fetch_job_issues(mock_job)
+    assert len(issues) == 1
+    iss = issues[0]
+    assert iss["track_id"] == 12
+    assert iss["type"] == "Id Switch Candidate"
+    assert iss["message"] == "[ID_SWITCH_CANDIDATE] Track #12 & #12: nghi hoán ID giữa track 12 và 13"
+
+    # Test open_cvat_job resolves dummy position with real track box
+    mock_client = MagicMock()
+    mock_client.jobs.retrieve.return_value = mock_job
+    mock_job.task_id = 37
+    mock_job.stage = "annotation"
+    mock_job.state = "rejected"
+    mock_job.assignee = MagicMock(username="Tran_Dinh_Cuong")
+    mock_job.start_frame = 0
+    mock_job.stop_frame = 200
+    mock_job.frame_count = 201
+
+    tr12 = Track(id=12, label="pedestrian")
+    tr12.boxes[7] = Box(7, 981.6, 297.27, 1000.63, 378.13, "pedestrian")
+    tracks = {12: tr12}
+
+    with patch.object(cvat_workflow, "_get_active_client", return_value=mock_client), \
+         patch.object(cvat_workflow, "load_job_tracks", return_value=(tracks, {"frame_size": (1280, 720)})), \
+         patch.object(cvat_workflow, "fetch_job_issues", return_value=issues):
+
+        res = cvat_workflow.open_cvat_job({"job_id": 37}, {"username": "Tran_Dinh_Cuong", "role": "annotator"})
+        assert len(res["issues"]) == 1
+        resolved_pos = res["issues"][0]["position"]
+        # Position should now be track 12's box, NOT [0, 0, 100, 100]
+        assert resolved_pos == [981.6, 297.3, 1000.6, 378.1]
 

@@ -1,0 +1,92 @@
+[
+  {
+    "type": "fragment",
+    "a": 5,
+    "b": 39,
+    "frame": 1
+  },
+  {
+    "type": "gap",
+    "a": 20,
+    "b": null,
+    "frame": 52
+  },
+  {
+    "type": "jump",
+    "a": 22,
+    "b": null,
+    "frame": 63
+  },
+  {
+    "type": "switch",
+    "a": 12,
+    "b": 13,
+    "frame": 27
+  },
+  {
+    "type": "duplicate",
+    "a": 30,
+    "b": 40,
+    "frame": 103
+  },
+  {
+    "type": "fragment",
+    "a": 16,
+    "b": 41,
+    "frame": 39
+  },
+  {
+    "type": "gap",
+    "a": 10,
+    "b": null,
+    "frame": 14
+  },
+  {
+    "type": "jump",
+    "a": 11,
+    "b": null,
+    "frame": 18
+  },
+  {
+    "type": "switch",
+    "a": 28,
+    "b": 0,
+    "frame": 95
+  },
+  {
+    "type": "duplicate",
+    "a": 15,
+    "b": 42,
+    "frame": 33
+  },
+  {
+    "type": "fragment",
+    "a": 27,
+    "b": 43,
+    "frame": 84
+  },
+  {
+    "type": "gap",
+    "a": 9,
+    "b": null,
+    "frame": 11
+  },
+  {
+    "type": "jump",
+    "a": 6,
+    "b": null,
+    "frame": 171
+  },
+  {
+    "type": "switch",
+    "a": 35,
+    "b": 36,
+    "frame": 131
+  },
+  {
+    "type": "duplicate",
+    "a": 24,
+    "b": 44,
+    "frame": 64
+  }
+]

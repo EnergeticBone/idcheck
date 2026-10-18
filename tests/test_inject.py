@@ -32,3 +32,11 @@ def test_inject_many_is_reproducible():
     _, t1 = inject_many(clean, 3, seed=1)
     _, t2 = inject_many(clean, 3, seed=1)
     assert t1 == t2 and len(t1) > 0
+
+
+def test_inject_many_no_class_flip():
+    clean = {i: mk(i, 0, 60, x0=10 * i) for i in range(1, 30)}
+    _, truths = inject_many(clean, 5, seed=42)
+    types = {t["type"] for t in truths}
+    assert "class_flip" not in types
+    assert len(truths) > 0

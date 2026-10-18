@@ -115,13 +115,15 @@ def _nearest_peer(tracks, tid, t, used):
 
 
 def inject_many(clean, n_per_type=10, seed=0, min_len=30, margin=10,
-                drop_range=(2, 6), gap_range=(2, 6), jump_range=(2.0, 4.0)):
+                drop_range=(2, 6), gap_range=(2, 6), jump_range=(2.0, 4.0),
+                kinds=None):
     rng = random.Random(seed)
     tracks = copy.deepcopy(clean)
     pool = [t for t, tr in tracks.items() if len(tr.boxes) >= min_len]
     rng.shuffle(pool)
     used, truths = set(), []
-    kinds = ["fragment", "gap", "jump", "switch", "class_flip", "duplicate"]
+    if kinds is None:
+        kinds = ["fragment", "gap", "jump", "switch", "duplicate"]
 
     def try_inject(kind, tid):
         fs = sorted(tracks[tid].boxes)
@@ -144,7 +146,9 @@ def inject_many(clean, n_per_type=10, seed=0, min_len=30, margin=10,
             candidates = [l for l in ["car", "pedestrian", "truck", "bus", "bicycle", "motorcycle"] if l != orig]
             new_lbl = rng.choice(candidates) if candidates else "pedestrian"
             return flip_class(tracks, tid, at, rng.randint(3, 8), new_lbl)
-        return duplicate_track(tracks, tid, shift=rng.uniform(1, 3))
+        if kind == "duplicate":
+            return duplicate_track(tracks, tid, shift=rng.uniform(1, 3))
+        return None
 
     for _ in range(n_per_type):
         for kind in kinds:

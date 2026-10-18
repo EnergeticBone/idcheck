@@ -103,6 +103,7 @@ def _interpolate_track_boxes(boxes_dict, label):
                     outside=False,
                     occluded=b_start.occluded,
                     keyframe=False,
+                    attributes=list(getattr(b_start, "attributes", []) or []),
                 )
 
     last_f = sorted_frames[-1]

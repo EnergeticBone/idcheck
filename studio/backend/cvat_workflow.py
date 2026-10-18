@@ -12,6 +12,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import threading
 import time
 
@@ -419,6 +420,71 @@ def submit_for_validation(req, actor):
     }
 
 
+def fetch_job_issues(job):
+    """Lấy danh sách các issue và bình luận hiện có trên CVAT job."""
+    out = []
+    if not hasattr(job, "get_issues"):
+        return out
+    try:
+        raw_issues = job.get_issues()
+        for iss in raw_issues:
+            comments = []
+            if hasattr(iss, "get_comments"):
+                try:
+                    for c in iss.get_comments():
+                        author = getattr(c, "author", None)
+                        comments.append({
+                            "id": getattr(c, "id", None),
+                            "author": getattr(author, "username", str(author)) if author else "User",
+                            "message": getattr(c, "message", ""),
+                            "created_date": str(getattr(c, "created_date", "")),
+                        })
+                except Exception:
+                    pass
+            owner = getattr(iss, "owner", None)
+            first_msg = comments[0]["message"] if comments else "CVAT Issue"
+            is_resolved = bool(getattr(iss, "resolved", False))
+
+            # Làm sạch các tiền tố lặp lại [CVAT_ISSUE] Track:
+            clean_msg = re.sub(r'^(?:\[CVAT_ISSUE\]\s*(?:Track:?\s*)?)+', '', first_msg, flags=re.IGNORECASE).strip()
+            if not clean_msg:
+                clean_msg = first_msg
+
+            # Trích xuất track_id từ nội dung tin nhắn
+            track_id = None
+            m_tid = re.search(r'Track\s*#?(\d+)', clean_msg, flags=re.IGNORECASE)
+            if m_tid:
+                try:
+                    track_id = int(m_tid.group(1))
+                except ValueError:
+                    pass
+
+            # Trích xuất loại issue nếu có dạng [TYPE]
+            issue_type = "CVAT Issue"
+            m_type = re.match(r'^\[([A-Z_]+)\]', clean_msg)
+            if m_type:
+                issue_type = m_type.group(1).replace("_", " ").title()
+
+            out.append({
+                "id": f"cvat_issue:{iss.id}",
+                "cvat_issue_id": iss.id,
+                "frame": getattr(iss, "frame", 0),
+                "position": getattr(iss, "position", []),
+                "resolved": is_resolved,
+                "owner": getattr(owner, "username", str(owner)) if owner else "CVAT",
+                "created_date": str(getattr(iss, "created_date", "")),
+                "comments": comments,
+                "message": clean_msg,
+                "type": issue_type,
+                "severity": "low" if is_resolved else "high",
+                "is_cvat_issue": True,
+                "track_id": track_id,
+            })
+    except Exception as e:
+        logger.warning("Could not fetch CVAT issues: %s", e)
+    return out
+
+
 def open_cvat_job(req, actor):
     """Tải toàn bộ track từ CVAT job và chạy idcheck rules để Reviewer kiểm tra trên Studio."""
     job_id = int(req.get("job_id"))
@@ -451,6 +517,8 @@ def open_cvat_job(req, actor):
                 "outside": False,
                 "occluded": b.occluded,
                 "keyframe": b.keyframe,
+                "attributes": getattr(b, "attributes", []) or [],
+                "track_attributes": getattr(tr, "attributes", []) or [],
             })
 
     # Lấy kích thước frame từ CVAT meta
@@ -458,21 +526,6 @@ def open_cvat_job(req, actor):
     start_f = getattr(job, "start_frame", 0)
     stop_f = getattr(job, "stop_frame", 0)
     total_frames = getattr(job, "frame_count", 0) or (stop_f - start_f + 1 if stop_f >= start_f else 0)
-
-    # Chạy kiểm tra bằng idcheck core rules
-    scan_body = {
-        "boxes": rows,
-        "width": w,
-        "height": h,
-        "fps": fps,
-        "mode": "video",
-        "total_frames": total_frames,
-        "frame_base": start_f,
-        "config": config_name,
-        "include_merges": True,
-        "job_id": job_id,
-    }
-    scan_res = scan(scan_body)
 
     host = getattr(client, "url", os.environ.get("CVAT_HOST", "https://cvat.trantuli.id.vn")).rstrip("/")
     assignee_name = job.assignee.username if getattr(job, "assignee", None) else None
@@ -500,6 +553,66 @@ def open_cvat_job(req, actor):
     is_admin = actor.get("role") == "admin"
     can_review = bool((effective_role in ("reviewer", "admin")) and not (is_own_job and not is_admin))
     can_edit_boxes = bool((effective_role in ("annotator", "admin")) and getattr(job, "stage", "") == "annotation")
+    is_annotator = bool(effective_role == "annotator" and not is_admin)
+
+    # Chạy kiểm tra bằng idcheck core rules:
+    # CHỈ DÀNH CHO REVIEWER / ADMIN. Annotator chỉ lấy danh sách issue từ CVAT do Reviewer chỉ định, KHÔNG quét tool idcheck.
+    if is_annotator:
+        scan_res = {
+            "issues": [],
+            "count": 0,
+            "counts": {"total": 0, "cvat": 0, "high": 0},
+            "stats": {"annotator_mode": True},
+        }
+    else:
+        scan_body = {
+            "boxes": rows,
+            "width": w,
+            "height": h,
+            "fps": fps,
+            "mode": "video",
+            "total_frames": total_frames,
+            "frame_base": start_f,
+            "config": config_name,
+            "include_merges": True,
+            "job_id": job_id,
+        }
+        scan_res = scan(scan_body)
+
+    cvat_issues = fetch_job_issues(job)
+
+    # Bổ sung tọa độ bounding box chính xác từ tracks nếu issue trên CVAT có vị trí dummy [0,0,100,100] hoặc trống
+    for iss_obj in cvat_issues:
+        tid = iss_obj.get("track_id")
+        pos = iss_obj.get("position") or []
+        is_dummy_pos = (not pos or (len(pos) >= 4 and pos[0] == 0.0 and pos[1] == 0.0 and pos[2] <= 100.0 and pos[3] <= 100.0))
+        if is_dummy_pos and tid is not None:
+            tr = tracks.get(tid) or tracks.get(str(tid))
+            if tr and getattr(tr, "boxes", None):
+                f = iss_obj.get("frame", 0)
+                if f in tr.boxes:
+                    b = tr.boxes[f]
+                    iss_obj["position"] = [round(b.x1, 1), round(b.y1, 1), round(b.x2, 1), round(b.y2, 1)]
+                elif tr.boxes:
+                    nearest_f = min(tr.boxes.keys(), key=lambda frame_no: abs(frame_no - f))
+                    b = tr.boxes[nearest_f]
+                    iss_obj["position"] = [round(b.x1, 1), round(b.y1, 1), round(b.x2, 1), round(b.y2, 1)]
+
+    if is_annotator:
+        # Đối với Annotator: Chỉ nạp các issue đã được Reviewer chốt tạo và đẩy lên CVAT.
+        # Tuyệt đối không nạp cảnh báo thô của thuật toán.
+        issues_to_return = cvat_issues
+        count_to_return = len(cvat_issues)
+        counts_to_return = {
+            "total": len(cvat_issues),
+            "cvat": len(cvat_issues),
+            "high": sum(1 for i in cvat_issues if not i.get("resolved")),
+        }
+    else:
+        # Đối với Reviewer / Admin: Nạp toàn bộ issue quét từ thuật toán + issue CVAT để soát xét và thẩm định
+        issues_to_return = scan_res["issues"]
+        count_to_return = scan_res["count"]
+        counts_to_return = scan_res["counts"]
 
     return {
         "job_id": job_id,
@@ -514,9 +627,10 @@ def open_cvat_job(req, actor):
         "can_edit_boxes": can_edit_boxes,
         "is_own_job": is_own_job,
         "boxes": rows,
-        "issues": scan_res["issues"],
-        "counts": scan_res["counts"],
-        "count": scan_res["count"],
+        "issues": issues_to_return,
+        "algorithm_issues": scan_res["issues"],
+        "counts": counts_to_return,
+        "count": count_to_return,
         "stats": scan_res["stats"],
         "width": w,
         "height": h,
@@ -526,6 +640,7 @@ def open_cvat_job(req, actor):
         "cvat_media_url_pattern": f"/api/cvat/frame/{job_id}/{{frame_id}}",
         "labels": sorted(labels_set) or ["Car"],
         "cvat_url": f"{host}/tasks/{job.task_id}/jobs/{job_id}",
+        "cvat_issues": cvat_issues,
         "config": config_name or "config_project_3.yaml",
     }
 
@@ -567,11 +682,28 @@ def reject_and_raise_issues(req, actor):
             continue
 
         raw_type = iss.get("type", "alert").lower().replace(" ", "_")
+        tid = iss.get("track_id")
+        if tid is None and iss.get("message"):
+            m = re.search(r'Track\s*#?(\d+)', str(iss["message"]), flags=re.IGNORECASE)
+            if m:
+                try:
+                    tid = int(m.group(1))
+                except ValueError:
+                    pass
+        elif tid is not None:
+            try:
+                tid = int(tid)
+            except (ValueError, TypeError):
+                pass
+
+        detail = str(iss.get("message") or iss.get("detail", "Issue phát hiện bởi idcheck Studio")).strip()
+        detail = re.sub(r'^(?:\[CVAT_ISSUE\]\s*(?:Track:?\s*)?)+', '', detail, flags=re.IGNORECASE).strip()
+
         alerts.append({
             "type": raw_type,
-            "track_id": iss.get("track_id"),
+            "track_id": tid,
             "frame": int(iss.get("frame", 0)),
-            "detail": iss.get("message") or iss.get("detail", "Issue phát hiện bởi idcheck Studio"),
+            "detail": detail,
             "other_id": iss.get("data", {}).get("target"),
         })
 
@@ -646,6 +778,43 @@ def raise_single_issue(req, actor):
     }
 
 
+def update_cvat_issue_status(req, actor):
+    """Cập nhật trạng thái resolved và/hoặc thêm comment cho Issue trên CVAT."""
+    require(actor, "annotator", "reviewer", "admin")
+    job_id = int(req.get("job_id"))
+    issue_id = int(req.get("issue_id"))
+    resolved = req.get("resolved")
+    comment_text = (req.get("comment") or "").strip()
+
+    client = _get_active_client()
+    iss = client.issues.retrieve(issue_id)
+
+    if resolved is not None:
+        iss.update({"resolved": bool(resolved)})
+
+    new_comment = None
+    if comment_text:
+        try:
+            created_c = client.comments.create({"issue": issue_id, "message": comment_text})
+            new_comment = {
+                "id": getattr(created_c, "id", None),
+                "author": actor.get("username", "User"),
+                "message": comment_text,
+                "created_date": time.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+        except Exception as e:
+            logger.warning("Failed to post comment to CVAT issue %s: %s", issue_id, e)
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "issue_id": issue_id,
+        "resolved": bool(getattr(iss, "resolved", resolved)),
+        "comment": new_comment,
+        "message": f"Đã cập nhật Issue #{issue_id} trên CVAT thành {'Đã giải quyết (Resolved)' if resolved else 'Chưa giải quyết (Open)'}."
+    }
+
+
 def accept_job(req, actor):
     """Reviewer chấp thuận hoàn thành Job -> stage 'acceptance', state 'completed'."""
     job_id = int(req.get("job_id"))
@@ -672,13 +841,45 @@ def accept_job(req, actor):
     if role_for_job not in ("reviewer", "admin") and not is_admin:
         raise PermissionError("Bạn không có quyền Reviewer đối với Job này.")
 
+    # Chốt chặn Quality Gate: Kiểm tra các lỗi nghiêm trọng (Blocker/High) hoặc Issue CVAT chưa giải quyết
+    override = bool(req.get("override", False))
+    override_reason = (req.get("override_reason") or "").strip()
+    input_issues = req.get("issues") or []
+    blockers = []
+    for iss in input_issues:
+        st = iss.get("status")
+        if st in ("false_positive", "verified", "fixed"):
+            continue
+        if iss.get("severity") in ("high", "critical", "blocker") or (iss.get("is_cvat_issue") and not iss.get("resolved")):
+            blockers.append(iss)
+
+    if blockers:
+        if not override:
+            raise ValueError(
+                f"Chốt chặn Quality Gate: Job #{job_id} vẫn còn {len(blockers)} lỗi nghiêm trọng (Blocker/High hoặc Issue CVAT chưa giải quyết). "
+                "Cần khắc phục các lỗi này trước khi duyệt, hoặc nhờ Lead/Admin xem xét phê duyệt ngoại lệ (Admin Override)."
+            )
+        if not is_admin:
+            raise PermissionError("Chỉ Lead / Admin mới có quyền Override Quality Gate để duyệt Job khi còn lỗi nghiêm trọng.")
+        if not override_reason:
+            raise ValueError("Vui lòng nhập lý do phê duyệt ngoại lệ (Override Reason) để lưu vào hồ sơ nghiệm thu.")
+
+        job_meta["quality_gate_override"] = {
+            "overridden_by": user_name,
+            "reason": override_reason,
+            "timestamp": time.time(),
+            "blockers_count": len(blockers),
+        }
+        meta[str(job_id)] = job_meta
+        _save_job_meta(meta)
+
     updated = job.update({"stage": "acceptance", "state": "completed"})
     return {
         "ok": True,
         "job_id": job_id,
         "stage": updated.stage,
         "state": updated.state,
-        "message": f"Job #{job_id} đã được nghiệm thu (stage=acceptance, state=completed).",
+        "message": f"Job #{job_id} đã được nghiệm thu (stage=acceptance, state=completed)." + (f" (Đã ghi nhận ngoại lệ từ Admin: {override_reason})" if override else ""),
     }
 
 
@@ -754,7 +955,7 @@ def boxes_to_cvat(boxes, label_ids, stop_frame):
             'keyframe': keyframe,
             'z_order': 0,
             'rotation': 0,
-            'attributes': []
+            'attributes': b.get('attributes') or []
         }
 
     tracks, shapes = [], []
@@ -787,12 +988,13 @@ def boxes_to_cvat(boxes, label_ids, stop_frame):
             if run[-1]['frame_id'] < stop_frame:
                 out.append(shape({**run[-1], 'frame_id': run[-1]['frame_id'] + 1}, outside=True))
 
+        track_attrs = group[0].get('track_attributes') or []
         tracks.append({
             'frame': group[0]['frame_id'],
             'label_id': label_ids[group[0]['class_name']],
             'group': 0,
             'source': 'manual',
-            'attributes': [],
+            'attributes': track_attrs,
             'shapes': out
         })
 
@@ -808,6 +1010,14 @@ def push_job_annotations(req, actor):
         raise ValueError("Không có danh sách bounding boxes để đẩy về CVAT")
     client = _get_active_client()
     job = client.jobs.retrieve(job_id)
+
+    # Chặn sửa nhãn khi Job đang ở giai đoạn validation (đang được Reviewer QC)
+    if getattr(job, "stage", "") != "annotation" and actor.get("role") != "admin":
+        raise PermissionError(
+            f"Không thể đẩy nhãn khi Job đang ở giai đoạn '{getattr(job, 'stage', '')}'. "
+            "Chỉ được cập nhật nhãn khi Job ở giai đoạn 'annotation' (Annotator làm việc)."
+        )
+
     labels = {lbl.name: lbl.id for lbl in job.get_labels()}
     
     stop_frame = int(req.get("stop_frame") or job.stop_frame)
@@ -966,7 +1176,7 @@ def calibrate_from_jobs(req, actor):
     3. Grid-search F1-score để tìm ngưỡng tối ưu (hạn chế tối đa báo oan).
     4. Lưu file cấu hình config_project_<id>.yaml và trả về thông số tối ưu.
     """
-    require(actor, "supervisor", "reviewer", "admin")
+    require(actor, "admin")
     from tools.tune.calibrate_project import (
         tune_gap_params, tune_max_speed, tune_switch_params, tune_merge_params
     )

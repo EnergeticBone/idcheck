@@ -1,0 +1,92 @@
+[
+  {
+    "type": "fragment",
+    "a": 9,
+    "b": 170,
+    "frame": 3
+  },
+  {
+    "type": "gap",
+    "a": 117,
+    "b": null,
+    "frame": 93
+  },
+  {
+    "type": "jump",
+    "a": 160,
+    "b": null,
+    "frame": 174
+  },
+  {
+    "type": "switch",
+    "a": 130,
+    "b": 122,
+    "frame": 132
+  },
+  {
+    "type": "duplicate",
+    "a": 36,
+    "b": 171,
+    "frame": 12
+  },
+  {
+    "type": "fragment",
+    "a": 131,
+    "b": 172,
+    "frame": 135
+  },
+  {
+    "type": "gap",
+    "a": 135,
+    "b": null,
+    "frame": 145
+  },
+  {
+    "type": "jump",
+    "a": 150,
+    "b": null,
+    "frame": 143
+  },
+  {
+    "type": "switch",
+    "a": 110,
+    "b": 105,
+    "frame": 88
+  },
+  {
+    "type": "duplicate",
+    "a": 123,
+    "b": 173,
+    "frame": 102
+  },
+  {
+    "type": "fragment",
+    "a": 38,
+    "b": 174,
+    "frame": 49
+  },
+  {
+    "type": "gap",
+    "a": 19,
+    "b": null,
+    "frame": 11
+  },
+  {
+    "type": "jump",
+    "a": 77,
+    "b": null,
+    "frame": 83
+  },
+  {
+    "type": "switch",
+    "a": 115,
+    "b": 141,
+    "frame": 150
+  },
+  {
+    "type": "duplicate",
+    "a": 136,
+    "b": 175,
+    "frame": 115
+  }
+]

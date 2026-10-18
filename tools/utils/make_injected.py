@@ -47,12 +47,17 @@ def main():
                         help="Dịch frame về 0-indexed (frame-1) cho MOT (mặc định: True)")
     parser.add_argument("--keep-frame-idx", action="store_true",
                         help="Giữ nguyên số frame (1-indexed như trong MOT)")
+    parser.add_argument("--include-class-flip", action="store_true", default=False,
+                        help="Chèn thêm lỗi đổi nhãn (class_flip) (mặc định: Không chèn)")
     args = parser.parse_args()
 
     seq = args.seq
     n = args.n
     seed = args.seed
     zero_indexed = not args.keep_frame_idx
+    kinds = ["fragment", "gap", "jump", "switch", "duplicate"]
+    if args.include_class_flip:
+        kinds.append("class_flip")
 
     import zipfile
     from adapters.cvat_xml import load_cvat_xml, load_cvat_xml_meta
@@ -92,6 +97,7 @@ def main():
             drop_range=(max(2, round(2 * k)), max(3, round(5 * k) if k < 1.0 else round(25 * k))),
             gap_range=(max(2, round(2 * k)), max(3, round(4 * k) if k < 1.0 else round(12 * k))),
             jump_range=(1.5, 4.0),
+            kinds=kinds,
         )
 
         out_dir = pathlib.Path(args.out_dir) if args.out_dir else in_path.parent
@@ -165,6 +171,7 @@ def main():
         drop_range=(max(2, round(2 * k)), max(3, round(25 * k))),
         gap_range=(max(2, round(2 * k)), max(3, round(12 * k))),
         jump_range=(1.0, 4.0),
+        kinds=kinds,
     )
 
     out_dir = pathlib.Path(args.out_dir) if args.out_dir else pathlib.Path("data/injected")

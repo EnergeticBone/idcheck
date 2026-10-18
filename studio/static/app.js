@@ -209,9 +209,50 @@ async function loadFile(file){try{
  if(canReview()&&!canEdit())toast('Reviewer đã nhập dữ liệu ở chế độ chỉ xem/QC. Annotator cần đưa dataset vào Project trước khi QC được lưu và chuyển sửa.');
  await scan();
  }catch(e){toast(e.message,true)}finally{setBusy(false)}}
-async function scan(){if(!S.boxes.length)return;try{setBusy(true);const meta=readMeta();const r=await api('validate',{boxes:S.boxes,...meta});S.issues=r.issues;S.lastScan=r;
- if(el('cvatBannerSubtitle')&&S.cvatJob){el('cvatBannerSubtitle').textContent=`Stage: ${(S.cvatJob.stage||'').toUpperCase()} (${S.cvatJob.state||''}) · Assignee: ${S.cvatJob.assignee||'Chưa gán'} · ${r.count} issues · ⚙ ${meta.config}`;}
- renderIssues();metrics();refreshTimeline();draw();toast(`Hoàn tất: ${r.count} cảnh báo (${meta.config}), ${r.stats.tracks} track`)}catch(e){toast(e.message,true)}finally{setBusy(false)}}
+function manualStorageKey(){
+ if(S.cvatJob && S.cvatJob.id) return 'idcheck_manual_cvat_' + S.cvatJob.id;
+ if(S.projectId) return 'idcheck_manual_proj_' + S.projectId;
+ return null;
+}
+function saveManualIssues(){
+ const key = manualStorageKey();
+ if(!key) return;
+ const manuals = (S.issues || []).filter(i => i.manual);
+ try{ localStorage.setItem(key, JSON.stringify(manuals)); }catch(e){}
+}
+function loadSavedManualIssues(){
+ const key = manualStorageKey();
+ if(!key) return [];
+ try{
+  const raw = localStorage.getItem(key);
+  return raw ? JSON.parse(raw) : [];
+ }catch(e){ return []; }
+}
+async function scan(){
+ if(!S.boxes.length)return;
+ if(S.cvatJob && S.cvatJobEffectiveRole === 'annotator' && S.user?.role !== 'admin'){
+  toast('Chế độ Annotator: Bạn đang xử lý các Issue đã được Reviewer chốt trên CVAT.', true);
+  return;
+ }
+ try{
+  setBusy(true);
+  const meta=readMeta();
+  const r=await api('validate',{boxes:S.boxes,...meta});
+  const existingManual = (S.issues || []).filter(i => i.manual);
+  const existingCvat = (S.issues || []).filter(i => i.is_cvat_issue);
+  const serverIds = new Set((r.issues || []).map(i => i.id));
+  const preservedManual = existingManual.filter(i => !serverIds.has(i.id));
+  const preservedCvat = existingCvat.filter(i => !serverIds.has(i.id));
+  S.issues = [...preservedManual, ...preservedCvat, ...(r.issues || [])];
+  S.lastScan=r;
+  saveManualIssues();
+  if(el('cvatBannerSubtitle')&&S.cvatJob){
+   el('cvatBannerSubtitle').textContent=`Stage: ${(S.cvatJob.stage||'').toUpperCase()} (${S.cvatJob.state||''}) · Assignee: ${S.cvatJob.assignee||'Chưa gán'} · ${S.issues.length} issues · ⚙ ${meta.config}`;
+  }
+  renderIssues();metrics();refreshTimeline();draw();
+  toast(`Hoàn tất: ${r.count} cảnh báo (${meta.config}), ${r.stats.tracks} track`);
+ }catch(e){toast(e.message,true)}finally{setBusy(false)}
+}
 async function loadDemo(){try{setBusy(true);const data=await api('demo');setMetadata(data,'Demo (dữ liệu giả lập)');await scan()}catch(e){toast(e.message,true)}finally{setBusy(false)}}
 function localVideoFrame(){return Math.max(0,S.frame-(S.meta.frame_base??0))}
 function seekVideo(){/* v2.2: decoded source-index frames fetched via FFmpeg; no inaccurate browser seek */}
@@ -622,13 +663,26 @@ function renderFrameBoxes(){
  }
 }
 
+function findIssueBox(i){
+ const tid=(i.track_id!==undefined&&i.track_id!==null)?Number(i.track_id):(i.message?Number(i.message.match(/Track\s*#?(\d+)/i)?.[1]):null);
+ let matchBox=(S.frameMap&&S.frameMap.get(i.frame)||[]).find(b=>b.track_id===tid);
+ if(!matchBox&&tid!=null&&S.trackMap&&S.trackMap.has(tid)){
+  const trBoxes=S.trackMap.get(tid);
+  if(trBoxes&&trBoxes.length>0){
+   matchBox=trBoxes.reduce((p,c)=>Math.abs(c.frame_id-i.frame)<Math.abs(p.frame_id-i.frame)?c:p);
+  }
+ }
+ return {tid,matchBox};
+}
+
 function renderIssues(){
  const dst=el('issueList'),filter=el('issueFilter').value;
+ const savedScrollTop = dst ? dst.scrollTop : 0;
  const merged=[...S.issues],seen=new Set(merged.map(i=>i.id));
  for(const [id,t] of Object.entries(S.tasks))if(!seen.has(id))merged.push({id,type:t.type,frame:t.frame,
  track_id:t.track_id,message:t.message||'Issue đã biến mất sau khi sửa – chờ Reviewer xác nhận',severity:'low',archived:true});
  const list=merged.filter(i=>{const status=S.tasks[i.id]?.status||i.status||S.decisions[i.id]||null;
-  return filter==='all'||(filter==='manual'&&i.manual)||(filter==='open'&&(!status||status==='needs_fix'||status==='fixed'))||
+  return filter==='all'||(filter==='manual'&&i.manual)||(filter==='cvat'&&i.is_cvat_issue)||(filter==='open'&&(!status||status==='needs_fix'||status==='fixed'||(i.is_cvat_issue&&!i.resolved)))||
   (filter==='handoff'&&status==='needs_fix')||(filter==='fixed'&&status==='fixed')||
   (filter==='high'&&i.severity==='high')||i.type===filter;
  });
@@ -643,6 +697,8 @@ function renderIssues(){
     <b>${htmlEscape(i.type)}</b>
     <span class="issue-pill-badge frame-pill">Frame ${i.frame}</span>
     ${trackLabel ? `<span class="issue-pill-badge track-pill">${htmlEscape(trackLabel)}</span>` : ''}
+    ${i.is_cvat_issue ? `<span class="issue-pill-badge" style="background:rgba(59,130,246,0.2);color:#60a5fa;border:1px solid rgba(59,130,246,0.4);" title="Issue liên thông trực tiếp từ CVAT">🏷️ CVAT #${i.cvat_issue_id}</span>` : ''}
+    ${i.is_cvat_issue ? (i.resolved ? `<span class="issue-pill-badge" style="background:rgba(16,185,129,0.2);color:#34d399;border:1px solid rgba(16,185,129,0.4);">✓ Resolved</span>` : `<span class="issue-pill-badge" style="background:rgba(239,68,68,0.2);color:#f87171;border:1px solid rgba(239,68,68,0.4);">⚡ Open</span>`) : ''}
     ${i.manual ? `<span class="issue-pill-badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;border:1px solid rgba(245,158,11,0.4);" title="Issue do Reviewer tự tạo thủ công">✍️ Reviewer Manual</span>` : ''}
     ${i.pushed_to_cvat ? `<span class="issue-pill-badge" style="background:rgba(16,185,129,0.2);color:#34d399;border:1px solid rgba(16,185,129,0.4);" title="Đã raise trực tiếp lên CVAT">⚡ CVAT Synced</span>` : ''}
     ${(i.fix_data?.reid_swap_score||i.data?.reid_swap_score)?`<span class="issue-pill-badge" style="background:rgba(99,102,241,0.2);color:#818cf8;border:1px solid rgba(99,102,241,0.4);" title="Xác thực ngoại quan bởi Visual Re-ID">👁 Re-ID ${Math.round((i.fix_data?.reid_swap_score||i.data?.reid_swap_score)*100)}%</span>`:(i.fix_data?.reid_visual_sim||i.data?.reid_visual_sim)?`<span class="issue-pill-badge" style="background:rgba(16,185,129,0.2);color:#34d399;border:1px solid rgba(16,185,129,0.4);" title="Độ tương đồng ngoại quan Re-ID">👁 Re-ID ${Math.round((i.fix_data?.reid_visual_sim||i.data?.reid_visual_sim)*100)}%</span>`:''}
@@ -657,9 +713,17 @@ function renderIssues(){
   const make=(label,cls,fn)=>{const b=document.createElement('button');b.textContent=label;b.className=cls;
    b.onclick=ev=>{ev.stopPropagation();fn()};actions.appendChild(b)};
   make('◎ Xem frame','',()=>{
-   showPage('workspace');S.selectedIssue=i.id;setFrame(i.frame);
-   const matchBox=(S.frameMap.get(i.frame)||[]).find(b=>b.track_id===i.track_id);
-   selectBox(matchBox?.uid||null);
+   showPage('workspace');S.selectedIssue=i.id;
+   const {tid,matchBox}=findIssueBox(i);
+   if(matchBox){
+    if(matchBox.frame_id!==S.frame)setFrame(matchBox.frame_id);
+    else setFrame(i.frame);
+    selectBox(matchBox.uid);
+    zoomToBox(matchBox,true);
+   }else{
+    setFrame(i.frame);
+    selectBox(null);
+   }
    renderIssues();
   });
 
@@ -792,6 +856,50 @@ function renderIssues(){
    }
   }else if(canEdit()&&status==='needs_fix')make('✓ Đã sửa · Gửi lại QC','fix',()=>handoffDialog(i,'fixed'));
 
+  if(i.is_cvat_issue && S.cvatJob){
+   if(!i.resolved){
+    make('✓ Resolved','fix',async ()=>{
+     try{
+      setBusy(true);
+      await api('cvat/issue/status',{job_id:S.cvatJob.id,issue_id:i.cvat_issue_id,resolved:true});
+      i.resolved=true;i.severity='low';renderIssues();metrics();toast(`Đã đánh dấu Resolved cho Issue #${i.cvat_issue_id} trên CVAT.`);
+     }catch(e){toast(e.message,true)}finally{setBusy(false)}
+    });
+   }else{
+    make('↩ Reopen','fix',async ()=>{
+     try{
+      setBusy(true);
+      await api('cvat/issue/status',{job_id:S.cvatJob.id,issue_id:i.cvat_issue_id,resolved:false});
+      i.resolved=false;i.severity='high';renderIssues();metrics();toast(`Đã mở lại Issue #${i.cvat_issue_id} trên CVAT.`);
+     }catch(e){toast(e.message,true)}finally{setBusy(false)}
+    });
+   }
+   make('💬 Bình luận','outline',()=>{
+    const commentsHtml = (i.comments||[]).map(c=>`<div style="margin-bottom:6px;padding:6px;background:#0f172a;border-radius:4px;font-size:12px;"><b>${htmlEscape(c.author)}:</b> ${htmlEscape(c.message)} <span style="color:#64748b;font-size:11px;">(${c.created_date||''})</span></div>`).join('');
+    openDialog(`Hội thoại CVAT Issue #${i.cvat_issue_id}`,`
+      <p style="margin-bottom:6px"><b>Frame ${i.frame} · Trạng thái: ${i.resolved?'Đã giải quyết (Resolved)':'Đang mở (Open)'}</b></p>
+      <div style="max-height:160px;overflow-y:auto;margin-bottom:8px;">${commentsHtml||'<p style="color:#94a3b8;font-size:12px;">Chưa có bình luận trao đổi nào.</p>'}</div>
+      <label>Thêm phản hồi tới Annotator / Reviewer trên CVAT:
+        <textarea id="cvatIssueNewComment" rows="2" style="width:100%;margin-top:6px;padding:8px;background:#1e293b;color:#f8fafc;border:1px solid #374151;border-radius:6px;"></textarea>
+      </label>
+    `,[
+      {label:'Đóng',onClick:closeDialog},
+      {label:'Gửi phản hồi lên CVAT',className:'primary',onClick:async()=>{
+        const txt=el('cvatIssueNewComment')?.value?.trim();
+        if(!txt)return toast('Vui lòng nhập nội dung bình luận.',true);
+        closeDialog();
+        try{
+          setBusy(true);
+          const res=await api('cvat/issue/status',{job_id:S.cvatJob.id,issue_id:i.cvat_issue_id,comment:txt});
+          if(res.comment) (i.comments=i.comments||[]).push(res.comment);
+          renderIssues();
+          toast('Đã gửi phản hồi lên CVAT.');
+        }catch(e){toast(e.message,true)}finally{setBusy(false)}
+      }}
+    ]);
+   });
+  }
+
   if(i.manual){
    if(canReview()&&S.cvatJob&&!i.pushed_to_cvat){
     make('⚡ Đẩy lên CVAT','fix',async ()=>{
@@ -803,6 +911,7 @@ function renderIssues(){
        issue:i
       });
       i.pushed_to_cvat=true;
+      saveManualIssues();
       renderIssues();
       toast(res.message||`Đã đẩy Issue Frame ${i.frame} lên CVAT thành công!`);
      }catch(err){
@@ -818,6 +927,7 @@ function renderIssues(){
      delete S.decisions[i.id];
      delete S.tasks[i.id];
      if(S.selectedIssue===i.id)S.selectedIssue=null;
+     saveManualIssues();
      renderIssues();
      metrics();
      draw();
@@ -827,21 +937,48 @@ function renderIssues(){
   }
   e.title="Click để xem · Click đúp để zoom tới đối tượng";
   e.onclick=()=>{
-   S.selectedIssue=i.id;setFrame(i.frame);
-   const matchBox=(S.frameMap.get(i.frame)||[]).find(b=>b.track_id===i.track_id);
-   selectBox(matchBox?.uid||null);
+   S.selectedIssue=i.id;
+   const {tid,matchBox}=findIssueBox(i);
+   if(matchBox){
+    if(matchBox.frame_id!==S.frame)setFrame(matchBox.frame_id);
+    else setFrame(i.frame);
+    selectBox(matchBox.uid);
+   }else{
+    setFrame(i.frame);
+    selectBox(null);
+   }
    renderIssues();
   };
   e.ondblclick=(evt)=>{
    evt.stopPropagation();
-   S.selectedIssue=i.id;setFrame(i.frame);
-   const matchBox=(S.frameMap.get(i.frame)||[]).find(b=>b.track_id===i.track_id);
+   S.selectedIssue=i.id;
+   const {tid,matchBox}=findIssueBox(i);
    if(matchBox){
+    if(matchBox.frame_id!==S.frame)setFrame(matchBox.frame_id);
+    else setFrame(i.frame);
     selectBox(matchBox.uid);
-    zoomToBox(matchBox, true);
+    zoomToBox(matchBox,true);
+   }else{
+    setFrame(i.frame);
+    selectBox(null);
+    if(i.position && i.position.length >= 4){
+     const isDummy = (i.position[0] === 0 && i.position[1] === 0 && i.position[2] <= 100 && i.position[3] <= 100);
+     if (!isDummy) {
+      const posBox = {
+        x: i.position[0],
+        y: i.position[1],
+        w: Math.max(10, i.position[2] - i.position[0]),
+        h: Math.max(10, i.position[3] - i.position[1])
+      };
+      zoomToBox(posBox, true);
+     }
+    }
    }
    renderIssues();
   };dst.appendChild(e);
+ }
+ if(savedScrollTop > 0 && dst) {
+  dst.scrollTop = savedScrollTop;
  }
 }
 function showPage(page){
@@ -1282,7 +1419,7 @@ async function submitCvatJobForReview(job_id, jobMeta){
 }
 async function openCvatJobInStudio(job_id,jobMeta){
  try{
-  setBusy(true);toast(`Đang tải annotation Job #${job_id} từ CVAT và chạy quét lỗi idcheck...`);
+  setBusy(true);toast(`Đang tải annotation Job #${job_id} từ CVAT...`);
   const fps=Number(el('cvatFpsInput')?.value||5.0),config=el('cvatConfigSelect')?.value||'config_project_3.yaml';
   S.activeConfig=config;
   const r=await api('cvat/job/open',{job_id,fps,config});
@@ -1291,7 +1428,38 @@ async function openCvatJobInStudio(job_id,jobMeta){
   S.cvatJob={id:r.job_id,task_id:r.task_id,stage:r.stage,state:r.state,assignee:r.assignee,cvat_url:r.cvat_url,total_frames:r.total_frames,frame_base:r.frame_base,width:r.width,height:r.height,fps:r.fps,config:S.activeConfig};
   S.boxes=(r.boxes||[]).filter(b=>!b.outside);S.meta={format:'cvat',frame_base:r.frame_base??0,mode:'video',width:r.width,height:r.height,total_frames:r.total_frames,fps:r.fps,config:S.activeConfig,labels:r.labels||['Car'],task_name:`CVAT Job #${r.job_id}`};
   S.session=null;S.sourceName=`CVAT Job #${r.job_id} (Task #${r.task_id})`;S.undo=[];S.redo=[];S.selectedUid=null;S.tasks={};resetDecisions();
-  S.issues=r.issues||[];S.lastScan={count:r.count,counts:r.counts,stats:r.stats,notes:[`Nạp trực tiếp từ CVAT API (Job #${r.job_id}).`,`Đã quét ${r.count} issues bằng idcheck core rules (${r.fps} FPS, ${S.activeConfig}).`]};
+  const isAnnotator = (r.effective_role === 'annotator' && S.user?.role !== 'admin');
+  const cvatIssues = (r.cvat_issues || []);
+  const savedManuals = loadSavedManualIssues();
+
+  if (isAnnotator) {
+    // Với vai trò Annotator: Chỉ nạp các issue đã được Reviewer chốt tạo và đẩy lên CVAT
+    S.issues = [...cvatIssues];
+    S.lastScan = {
+      count: cvatIssues.length,
+      counts: r.counts || { cvat: cvatIssues.length },
+      stats: r.stats,
+      notes: [
+        `Nạp trực tiếp từ CVAT API (Job #${r.job_id}).`,
+        `Chế độ Annotator: Hiển thị ${cvatIssues.length} issue đã được Reviewer chốt tạo trên CVAT để bạn khắc phục.`
+      ]
+    };
+  } else {
+    // Với vai trò Reviewer / Admin: Nạp toàn bộ issue quét từ thuật toán + issue CVAT để rà soát và thẩm định
+    const serverIssueIds = new Set((r.issues || []).map(i => i.id));
+    const filteredManuals = savedManuals.filter(i => !serverIssueIds.has(i.id));
+    S.issues = [...filteredManuals, ...cvatIssues, ...(r.issues || [])];
+    S.lastScan = {
+      count: S.issues.length,
+      counts: r.counts,
+      stats: r.stats,
+      notes: [
+        `Nạp trực tiếp từ CVAT API (Job #${r.job_id}).`,
+        `Đã quét ${r.count} issues bằng idcheck core rules (${r.fps} FPS, ${S.activeConfig}).`,
+        `Liên thông ${cvatIssues.length} issues trực tiếp từ CVAT.`
+      ]
+    };
+  }
   if(r.width)el('imageWidth').value=r.width;if(r.height)el('imageHeight').value=r.height;el('fps').value=r.fps;el('datasetName').textContent=S.sourceName;
   indexBoxes();undoButtons();
   const startF=r.frame_base||0,totalF=r.total_frames||(r.boxes.length?Math.max(...r.boxes.map(b=>b.frame_id))-startF+1:1);
@@ -1300,7 +1468,8 @@ async function openCvatJobInStudio(job_id,jobMeta){
   S.mediaMode='cvat-stream';el('mediaInfo').textContent=`⚡ CVAT Live Stream · Job #${r.job_id} · ${totalF} frames trực tiếp từ server`;
   el('cvatJobBanner').hidden=false;
   el('cvatBannerTitle').textContent=`CVAT Job #${r.job_id} · Task #${r.task_id}`;
-  el('cvatBannerSubtitle').textContent=`Stage: ${(r.stage||'').toUpperCase()} (${r.state}) · Assignee: ${r.assignee||'Chưa gán'} · ${r.count} issues · ⚙ ${S.activeConfig}`;
+  const issueText = isAnnotator ? `${cvatIssues.length} CVAT issues` : `${S.issues.length} issues`;
+  el('cvatBannerSubtitle').textContent=`Stage: ${(r.stage||'').toUpperCase()} (${r.state}) · Assignee: ${r.assignee||'Chưa gán'} · ${issueText} · ⚙ ${S.activeConfig}`;
   S.canReview = r.can_review;
   S.canEditBoxes = r.can_edit_boxes;
   S.cvatJobEffectiveRole = r.effective_role;
@@ -1320,9 +1489,26 @@ async function openCvatJobInStudio(job_id,jobMeta){
   if(el('btnCvatAccept')) el('btnCvatAccept').hidden = !r.can_review;
   if(el('btnCvatReject')) el('btnCvatReject').hidden = !r.can_review;
   if(el('btnCvatSubmitValidation')) el('btnCvatSubmitValidation').hidden = (r.stage !== 'annotation');
-  if(el('cvatWorkspaceConfigSelect')) el('cvatWorkspaceConfigSelect').value = S.activeConfig;
+  if(el('btnCvatRescan')) el('btnCvatRescan').hidden = isAnnotator;
+  if(el('btnCreateIssue')) el('btnCreateIssue').hidden = isAnnotator;
+  if(el('btnBoxRaiseIssue')) el('btnBoxRaiseIssue').hidden = isAnnotator;
+  if(el('cvatWorkspaceConfigSelect')) {
+    el('cvatWorkspaceConfigSelect').disabled = isAnnotator;
+    el('cvatWorkspaceConfigSelect').value = S.activeConfig;
+  }
+  const issueHeadP = el('sidePaneIssues')?.querySelector('.issues-head p');
+  if(issueHeadP){
+    issueHeadP.textContent = isAnnotator
+      ? 'Danh sách Issue do Reviewer yêu cầu từ CVAT cần Annotator sửa'
+      : 'Reviewer kiểm định chất lượng → Báo lỗi (Raise) về Annotator → Nghiệm thu';
+  }
+  updateRoleUI();
   S.frame=startF;refreshAll();showPage('workspace');
-  toast(`Đã nạp Job #${r.job_id}: ${r.boxes.length} boxes, ${r.count} issues phát hiện.`);
+  if (isAnnotator) {
+    toast(`Đã nạp Job #${r.job_id}: ${r.boxes.length} boxes, ${cvatIssues.length} issues từ CVAT.`);
+  } else {
+    toast(`Đã nạp Job #${r.job_id}: ${r.boxes.length} boxes, ${r.count} issues phát hiện.`);
+  }
  }catch(e){toast(`Lỗi khi mở CVAT Job #${job_id}: ${e.message}`,true)}finally{setBusy(false)}
 }
 function rejectCvatJobDialog(){
@@ -1342,10 +1528,66 @@ function rejectCvatJobDialog(){
 }
 function acceptCvatJobDialog(){
  if(!S.cvatJob)return toast('Không có CVAT Job nào đang mở.',true);
+ const blockers = S.issues.filter(i => {
+   const st = S.decisions[i.id] || i.status;
+   if(st === 'false_positive' || st === 'verified' || st === 'fixed') return false;
+   return (i.severity === 'high' || (i.is_cvat_issue && !i.resolved));
+ });
+ const isAdmin = S.user?.role === 'admin' || S.cvatJobEffectiveRole === 'admin';
+
+ if (blockers.length > 0) {
+   if (!isAdmin) {
+     return openDialog('⚠️ Chốt chặn Quality Gate: Không thể nghiệm thu', `
+       <p style="color:#ef4444;font-weight:600;">Job #${S.cvatJob.id} vẫn còn ${blockers.length} lỗi nghiêm trọng / Issue CVAT chưa giải quyết.</p>
+       <ul style="padding-left:18px;margin:8px 0;font-size:12px;color:#94a3b8;max-height:140px;overflow-y:auto;">
+         ${blockers.slice(0, 10).map(b => `<li>Frame ${b.frame}: [${htmlEscape(b.type)}] ${htmlEscape(b.message || '')}</li>`).join('')}
+         ${blockers.length > 10 ? `<li>... và ${blockers.length - 10} lỗi khác</li>` : ''}
+       </ul>
+       <p style="font-size:13px;color:#cbd5e1;">Theo quy chuẩn QA, bạn không thể duyệt hoàn tất khi Quality Gate chưa đạt. Hãy yêu cầu Annotator khắc phục các lỗi này hoặc liên hệ Lead / Admin để xin phê duyệt ngoại lệ (Override).</p>
+     `, [{label: 'Đóng', onClick: closeDialog}]);
+   } else {
+     return openDialog('🛡️ Quality Gate Cảnh báo: Phê duyệt Ngoại lệ (Admin Override)', `
+       <p style="color:#f59e0b;font-weight:600;">Job #${S.cvatJob.id} còn ${blockers.length} lỗi nghiêm trọng / Issue CVAT chưa giải quyết.</p>
+       <p style="font-size:13px;color:#cbd5e1;">Với vai trò <b>Lead / Admin</b>, bạn có thể thực hiện <b>Admin Override</b> để nghiệm thu có điều kiện.</p>
+       <label style="display:block;margin-top:10px;">
+         <b>Lý do phê duyệt ngoại lệ (Bắt buộc):</b>
+         <textarea id="overrideAcceptReason" rows="3" placeholder="Ví dụ: Khách hàng chấp thuận ngoại lệ; các issue nhỏ được chuyển theo dõi riêng..." style="width:100%;margin-top:6px;padding:8px;background:#1e293b;color:#f8fafc;border:1px solid #374151;border-radius:6px;resize:vertical;"></textarea>
+       </label>
+     `, [
+       {label: 'Hủy', onClick: closeDialog},
+       {label: '⚡ Xác nhận Override & Duyệt', className: 'primary', onClick: async () => {
+         const reason = el('overrideAcceptReason')?.value?.trim();
+         if (!reason) return toast('Vui lòng nhập lý do phê duyệt ngoại lệ.', true);
+         closeDialog();
+         try {
+           setBusy(true);
+           const res = await api('cvat/job/accept', {
+             job_id: S.cvatJob.id,
+             issues: S.issues,
+             override: true,
+             override_reason: reason
+           });
+           toast(res.message || `Job #${S.cvatJob.id} đã được nghiệm thu (Override).`);
+           el('cvatJobBanner').hidden = true;
+           S.cvatJob = null;
+           showPage('cvatJobs');
+           await renderCvatJobs();
+         } catch(e) {
+           toast(e.message, true);
+         } finally {
+           setBusy(false);
+         }
+       }}
+     ]);
+   }
+ }
+
  openDialog('Nghiệm thu CVAT Job',
-  `<p>Bạn có chắc chắn muốn nghiệm thu <b>CVAT Job #${S.cvatJob.id}</b>?</p><p>Trạng thái trên CVAT sẽ chuyển thành <b>stage=acceptance, state=completed</b>.</p>`,
+  `<p>Quality Gate: <b>✓ ĐẠT CHUẨN</b> (Không còn lỗi nghiêm trọng chưa xử lý).</p>
+   <p>Bạn có chắc chắn muốn nghiệm thu <b>CVAT Job #${S.cvatJob.id}</b>?</p>
+   <p>Trạng thái trên CVAT sẽ chuyển thành <b>stage=acceptance, state=completed</b>.</p>`,
   [{label:'Hủy',onClick:closeDialog},{label:'✓ Nghiệm thu hoàn tất',className:'primary',onClick:async()=>{
-    closeDialog();try{setBusy(true);const res=await api('cvat/job/accept',{job_id:S.cvatJob.id});
+    closeDialog();try{setBusy(true);const res=await api('cvat/job/accept',{job_id:S.cvatJob.id,issues:S.issues});
     toast(res.message||`Job #${S.cvatJob.id} đã được nghiệm thu.`);el('cvatJobBanner').hidden=true;S.cvatJob=null;showPage('cvatJobs');await renderCvatJobs()}
     catch(e){toast(e.message,true)}finally{setBusy(false)}}}]
  );
@@ -1485,6 +1727,7 @@ async function openCreateIssueDialog(opt={}){
         };
 
         S.issues.unshift(newIss);
+        saveManualIssues();
         closeDialog();
         renderIssues();
         metrics();
@@ -1533,6 +1776,7 @@ async function openCreateIssueDialog(opt={}){
             message: msgVal
           });
           S.issues.unshift(newIss);
+          saveManualIssues();
           renderIssues();
           metrics();
           draw();
@@ -2179,10 +2423,11 @@ function updateRoleUI(){
  if(el('navProjects')) el('navProjects').hidden = !admin;
  if(el('navReport')) el('navReport').hidden = !superv;
  if(el('navAudit')) el('navAudit').hidden = !superv;
- if(el('btnTuneThresholds')) el('btnTuneThresholds').hidden = !superv;
+ if(el('btnTuneThresholds')) el('btnTuneThresholds').hidden = !admin;
+ if(el('btnBenchmarkGT')) el('btnBenchmarkGT').hidden = !admin;
 
- // Ẩn toàn bộ nút tạo / lưu / xuất offline đối với Worker & Supervisor, CHỈ Admin mới thấy:
- for(const id of ['btnCreateProject','btnSaveProject','btnSaveSession','btnDemo','btnExport','btnProjectPageCreate']){
+ // Ẩn toàn bộ nút tạo / lưu / xuất offline & benchmark đối với Worker & Supervisor, CHỈ Admin mới thấy:
+ for(const id of ['btnCreateProject','btnSaveProject','btnSaveSession','btnDemo','btnExport','btnProjectPageCreate','btnBenchmark']){
   const button=el(id);
   if(button) button.hidden = !admin;
  }
@@ -2196,6 +2441,14 @@ function updateRoleUI(){
  for(const id of ['fieldTrack','fieldClass','fieldX','fieldY','fieldW','fieldH']) {
   if(el(id)) el(id).disabled = !canModifyBox;
  }
+
+ // Quyền trên CVAT Job: Annotator không quét thô thuật toán và không tự tạo issue cho mình
+ const isCvatAnnotator = Boolean(S.cvatJob && S.cvatJobEffectiveRole === 'annotator' && !admin);
+ if(el('btnScan')) el('btnScan').hidden = isCvatAnnotator;
+ if(el('btnCvatRescan')) el('btnCvatRescan').hidden = isCvatAnnotator;
+ if(el('btnCreateIssue')) el('btnCreateIssue').hidden = isCvatAnnotator;
+ if(el('btnBoxRaiseIssue')) el('btnBoxRaiseIssue').hidden = isCvatAnnotator;
+ if(el('cvatWorkspaceConfigSelect')) el('cvatWorkspaceConfigSelect').disabled = isCvatAnnotator;
 
  setBusy(false);undoButtons();selectBox(S.selectedUid);renderIssues();
 }
