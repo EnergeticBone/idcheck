@@ -335,4 +335,50 @@ def test_auto_tune_and_configs(tmp_path):
             out_path.unlink()
 
 
+def test_raise_single_issue():
+    mock_client = MagicMock()
+    mock_job = MagicMock()
+    mock_job.id = 12
+    mock_client.jobs.retrieve.return_value = mock_job
+
+    reviewer = {"username": "reviewer_user", "role": "reviewer"}
+
+    with patch.object(cvat_workflow, "_get_active_client", return_value=mock_client), \
+         patch.object(cvat_workflow, "load_job_tracks", return_value=({}, {})), \
+         patch.object(cvat_workflow, "post_alerts_as_issues", return_value=[{"status": "created"}]) as mock_post:
+
+        # Case 1: Flat payload
+        req_flat = {
+            "job_id": 12,
+            "type": "id_switch_candidate",
+            "track_id": 142,
+            "other_id": 144,
+            "frame": 45,
+            "message": "Xe 142 switch sang 144"
+        }
+        res1 = cvat_workflow.raise_single_issue(req_flat, reviewer)
+        assert res1["ok"] is True
+        assert res1["alert"]["track_id"] == 142
+        assert res1["alert"]["other_id"] == 144
+        assert res1["alert"]["frame"] == 45
+        assert "Xe 142 switch sang 144" in res1["alert"]["detail"]
+        mock_post.assert_called()
+
+        # Case 2: Nested issue object
+        req_nested = {
+            "job_id": 12,
+            "issue": {
+                "type": "Box Jump",
+                "track_id": 99,
+                "frame": 10,
+                "message": "Box nhảy bất thường"
+            }
+        }
+        res2 = cvat_workflow.raise_single_issue(req_nested, reviewer)
+        assert res2["ok"] is True
+        assert res2["alert"]["track_id"] == 99
+        assert res2["alert"]["frame"] == 10
+        assert "Box nhảy bất thường" in res2["alert"]["detail"]
+
+
 

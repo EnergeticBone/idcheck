@@ -73,7 +73,7 @@ function indexBoxes(){
 function resetDecisions(){S.decisions=Object.fromEntries(Object.entries(S.tasks).map(([id,t])=>[id,t.status]));S.selectedIssue=null}
 function readMeta(){const width=Number(el('imageWidth').value),height=Number(el('imageHeight').value),fpsVal=Number(el('fps').value);
  const cfgVal = S.activeConfig || S.meta?.config || el('cvatConfigSelect')?.value || 'config_project_3.yaml';
- return {...S.meta,width:width>0?width:null,height:height>0?height:null,fps:fpsVal>0?fpsVal:(S.meta.fps||5.0),config:cfgVal}}
+ return {...S.meta,job_id:S.cvatJob?.id||S.meta?.job_id||null,video_token:S.videoToken||S.meta?.video_token||null,width:width>0?width:null,height:height>0?height:null,fps:fpsVal>0?fpsVal:(S.meta.fps||5.0),config:cfgVal}}
 function setMetadata(data,name){
  clearMedia(); // Prevent previous dataset/demo media from leaking into a newly imported XML/MOT.
  S.boxes=(data.boxes||[]).filter(b=>!b.outside);S.meta={format:data.format,frame_base:data.frame_base??0,mode:data.mode||'video',
@@ -628,7 +628,7 @@ function renderIssues(){
  for(const [id,t] of Object.entries(S.tasks))if(!seen.has(id))merged.push({id,type:t.type,frame:t.frame,
  track_id:t.track_id,message:t.message||'Issue đã biến mất sau khi sửa – chờ Reviewer xác nhận',severity:'low',archived:true});
  const list=merged.filter(i=>{const status=S.tasks[i.id]?.status||i.status||S.decisions[i.id]||null;
-  return filter==='all'||(filter==='open'&&(!status||status==='needs_fix'||status==='fixed'))||
+  return filter==='all'||(filter==='manual'&&i.manual)||(filter==='open'&&(!status||status==='needs_fix'||status==='fixed'))||
   (filter==='handoff'&&status==='needs_fix')||(filter==='fixed'&&status==='fixed')||
   (filter==='high'&&i.severity==='high')||i.type===filter;
  });
@@ -643,6 +643,9 @@ function renderIssues(){
     <b>${htmlEscape(i.type)}</b>
     <span class="issue-pill-badge frame-pill">Frame ${i.frame}</span>
     ${trackLabel ? `<span class="issue-pill-badge track-pill">${htmlEscape(trackLabel)}</span>` : ''}
+    ${i.manual ? `<span class="issue-pill-badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;border:1px solid rgba(245,158,11,0.4);" title="Issue do Reviewer tự tạo thủ công">✍️ Reviewer Manual</span>` : ''}
+    ${i.pushed_to_cvat ? `<span class="issue-pill-badge" style="background:rgba(16,185,129,0.2);color:#34d399;border:1px solid rgba(16,185,129,0.4);" title="Đã raise trực tiếp lên CVAT">⚡ CVAT Synced</span>` : ''}
+    ${(i.fix_data?.reid_swap_score||i.data?.reid_swap_score)?`<span class="issue-pill-badge" style="background:rgba(99,102,241,0.2);color:#818cf8;border:1px solid rgba(99,102,241,0.4);" title="Xác thực ngoại quan bởi Visual Re-ID">👁 Re-ID ${Math.round((i.fix_data?.reid_swap_score||i.data?.reid_swap_score)*100)}%</span>`:(i.fix_data?.reid_visual_sim||i.data?.reid_visual_sim)?`<span class="issue-pill-badge" style="background:rgba(16,185,129,0.2);color:#34d399;border:1px solid rgba(16,185,129,0.4);" title="Độ tương đồng ngoại quan Re-ID">👁 Re-ID ${Math.round((i.fix_data?.reid_visual_sim||i.data?.reid_visual_sim)*100)}%</span>`:''}
    </div>
    <span class="sev ${i.severity||'low'}">${htmlEscape(i.severity||'low')}</span>
   </div>
@@ -788,6 +791,40 @@ function renderIssues(){
     }
    }
   }else if(canEdit()&&status==='needs_fix')make('✓ Đã sửa · Gửi lại QC','fix',()=>handoffDialog(i,'fixed'));
+
+  if(i.manual){
+   if(canReview()&&S.cvatJob&&!i.pushed_to_cvat){
+    make('⚡ Đẩy lên CVAT','fix',async ()=>{
+     try{
+      setBusy(true);
+      toast('Đang đẩy issue lên CVAT...');
+      const res=await api('cvat/job/raise-issue',{
+       job_id:S.cvatJob.id,
+       issue:i
+      });
+      i.pushed_to_cvat=true;
+      renderIssues();
+      toast(res.message||`Đã đẩy Issue Frame ${i.frame} lên CVAT thành công!`);
+     }catch(err){
+      toast('Lỗi khi đẩy lên CVAT: '+(err.message||err),true);
+     }finally{
+      setBusy(false);
+     }
+    });
+   }
+   if(canReview()||canEdit()){
+    make('✕ Xóa Issue','reject',()=>{
+     S.issues=S.issues.filter(x=>x.id!==i.id);
+     delete S.decisions[i.id];
+     delete S.tasks[i.id];
+     if(S.selectedIssue===i.id)S.selectedIssue=null;
+     renderIssues();
+     metrics();
+     draw();
+     toast('Đã xóa issue thủ công.');
+    });
+   }
+  }
   e.title="Click để xem · Click đúp để zoom tới đối tượng";
   e.onclick=()=>{
    S.selectedIssue=i.id;setFrame(i.frame);
@@ -985,6 +1022,7 @@ async function renderCvatJobs(){
   if(el('cvatHostTag'))el('cvatHostTag').textContent='⚡ '+(res.cvat_host?res.cvat_host.replace(/^https?:\/\//,''):'CVAT Connected');
   if(el('cvatStatusSummary'))el('cvatStatusSummary').innerHTML=`Tổ chức: <b>${htmlEscape(res.active_org||'Cá nhân')}</b> · Tài khoản: <b>${htmlEscape(res.username)}</b> · Vai trò: <b>${htmlEscape(res.role.toUpperCase())}</b> (${res.filtered_count}/${res.all_count} jobs)`;
   
+  loadCvatConfigs();
   const userRole = role();
   const allJobsList = res.all_jobs || res.jobs || [];
   S.lastCvatJobs = allJobsList;
@@ -1282,6 +1320,7 @@ async function openCvatJobInStudio(job_id,jobMeta){
   if(el('btnCvatAccept')) el('btnCvatAccept').hidden = !r.can_review;
   if(el('btnCvatReject')) el('btnCvatReject').hidden = !r.can_review;
   if(el('btnCvatSubmitValidation')) el('btnCvatSubmitValidation').hidden = (r.stage !== 'annotation');
+  if(el('cvatWorkspaceConfigSelect')) el('cvatWorkspaceConfigSelect').value = S.activeConfig;
   S.frame=startF;refreshAll();showPage('workspace');
   toast(`Đã nạp Job #${r.job_id}: ${r.boxes.length} boxes, ${r.count} issues phát hiện.`);
  }catch(e){toast(`Lỗi khi mở CVAT Job #${job_id}: ${e.message}`,true)}finally{setBusy(false)}
@@ -1327,22 +1366,187 @@ async function assignCvatJobDialog(job_id,job){
 
 async function loadCvatConfigs(selectedConfig){
  const sel = el('cvatConfigSelect');
- if(!sel) return;
+ const wsSel = el('cvatWorkspaceConfigSelect');
+ if(!sel && !wsSel) return;
  try {
   const res = await api('cvat/configs');
   if (res.configs && res.configs.length) {
-   const curVal = selectedConfig || sel.value || 'config_project_3.yaml';
-   sel.innerHTML = res.configs.map(cfg => {
+   const curVal = selectedConfig || S.activeConfig || sel?.value || wsSel?.value || 'config_project_3.yaml';
+   const formatLabel = cfg => {
     let label = cfg;
     if (cfg === 'config_project_3.yaml') label += ' (BDD100K 5 FPS)';
+    else if (cfg === 'config_project_3_optimized.yaml') label += ' (BDD100K Tối ưu)';
+    else if (cfg === 'config_project_3_test.yaml') label += ' (BDD100K Test)';
+    else if (cfg === 'config_project_3_test2.yaml') label += ' (BDD100K Test 2)';
+    else if (cfg === 'config_mot17.yaml') label += ' (MOT17 Benchmark)';
     else if (cfg === 'config_base.yaml') label += ' (Mặc định)';
-    return `<option value="${htmlEscape(cfg)}" ${cfg === curVal ? 'selected' : ''}>${htmlEscape(label)}</option>`;
+    return label;
+   };
+   const optionsHtml = res.configs.map(cfg => {
+    return `<option value="${htmlEscape(cfg)}" ${cfg === curVal ? 'selected' : ''}>${htmlEscape(formatLabel(cfg))}</option>`;
    }).join('');
-   if (selectedConfig) sel.value = selectedConfig;
+   if (sel) {
+    sel.innerHTML = optionsHtml;
+    sel.value = curVal;
+   }
+   if (wsSel) {
+    wsSel.innerHTML = optionsHtml;
+    wsSel.value = curVal;
+   }
+   S.activeConfig = curVal;
   }
  } catch(e) {
   console.warn('Could not load configs list:', e);
  }
+}
+
+async function openCreateIssueDialog(opt={}){
+  const frame = Number(opt.frame !== undefined ? opt.frame : S.frame);
+  let defaultTrack = '';
+  if (opt.track_id !== undefined && opt.track_id !== null && opt.track_id !== '') {
+    defaultTrack = opt.track_id;
+  } else if (S.selectedUid) {
+    const curBox = S.boxes.find(b => b.uid === S.selectedUid);
+    if (curBox && curBox.track_id !== undefined && curBox.track_id !== null) {
+      defaultTrack = curBox.track_id;
+    }
+  }
+
+  const defaultType = opt.type || (defaultTrack !== '' ? 'ID Switch Candidate' : 'Box Jump');
+  const isCvat = !!S.cvatJob;
+
+  const html = `
+  <div style="display:flex;flex-direction:column;gap:12px;text-align:left;">
+    <p style="margin:0;font-size:13px;color:#94a3b8;line-height:1.4;">
+      Reviewer tự tạo issue cảnh báo cho lỗi mà rule/mô hình chưa bắt được. Issue sẽ được đưa vào danh sách kiểm định để giao việc cho Annotator hoặc raise trực tiếp lên CVAT.
+    </p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <label style="font-size:12px;font-weight:600;">Frame số:
+        <input type="number" id="manualIssueFrame" value="${frame}" min="0" style="width:100%;margin-top:4px;padding:6px;border-radius:6px;border:1px solid #374151;background:#1e293b;color:#f8fafc;">
+      </label>
+      <label style="font-size:12px;font-weight:600;">Mức độ nghiêm trọng:
+        <select id="manualIssueSeverity" style="width:100%;margin-top:4px;padding:6px;border-radius:6px;border:1px solid #374151;background:#1e293b;color:#f8fafc;">
+          <option value="high" selected>High (Bắt buộc sửa)</option>
+          <option value="medium">Medium (Trung bình)</option>
+          <option value="low">Low (Lưu ý / Nhắc nhở)</option>
+        </select>
+      </label>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <label style="font-size:12px;font-weight:600;">Track ID:
+        <input type="number" id="manualIssueTrack" value="${defaultTrack}" placeholder="Ví dụ: 142" style="width:100%;margin-top:4px;padding:6px;border-radius:6px;border:1px solid #374151;background:#1e293b;color:#f8fafc;">
+      </label>
+      <label style="font-size:12px;font-weight:600;">Track liên quan (hoán đổi ID):
+        <input type="number" id="manualIssueOtherTrack" placeholder="Ví dụ: 144" style="width:100%;margin-top:4px;padding:6px;border-radius:6px;border:1px solid #374151;background:#1e293b;color:#f8fafc;">
+      </label>
+    </div>
+    <label style="font-size:12px;font-weight:600;">Loại lỗi (Error Type):
+      <select id="manualIssueType" style="width:100%;margin-top:4px;padding:6px;border-radius:6px;border:1px solid #374151;background:#1e293b;color:#f8fafc;">
+        <option value="ID Switch Candidate" ${defaultType==='ID Switch Candidate'?'selected':''}>ID Switch Candidate (Hoán đổi ID / Cướp track)</option>
+        <option value="Box Jump" ${defaultType==='Box Jump'?'selected':''}>Box Jump (Box nhảy / Lệch quỹ đạo)</option>
+        <option value="Gap Frame" ${defaultType==='Gap Frame'?'selected':''}>Gap Frame (Thiếu frame / Đứt đoạn track)</option>
+        <option value="Class Change">Class Change (Sai nhãn phân loại)</option>
+        <option value="Duplicate Track/Frame">Duplicate Track/Frame (Trùng lặp box)</option>
+        <option value="Invalid Box">Invalid Box (Vẽ lỗi / Sai kích thước)</option>
+        <option value="Custom Reviewer Note">Ghi chú kiểm định khác (Custom Note)</option>
+      </select>
+    </label>
+    <label style="font-size:12px;font-weight:600;">Ghi chú mô tả lỗi / Hướng dẫn Annotator sửa:
+      <textarea id="manualIssueMessage" rows="3" placeholder="Ví dụ: Xe 142 bị tráo ID với xe 144 tại frame này, annotator đổi lại ID giúp mình..." style="width:100%;margin-top:4px;padding:8px;background:#1e293b;color:#f8fafc;border:1px solid #374151;border-radius:6px;resize:vertical;"></textarea>
+    </label>
+  </div>
+  `;
+
+  const buttons = [
+    { label: 'Hủy', onClick: closeDialog },
+    {
+      label: '＋ Thêm vào danh sách Issue',
+      className: 'primary',
+      onClick: () => {
+        const fVal = Number(el('manualIssueFrame')?.value || frame);
+        const tVal = el('manualIssueTrack')?.value?.trim();
+        const otVal = el('manualIssueOtherTrack')?.value?.trim();
+        const typeVal = el('manualIssueType')?.value || 'Custom Reviewer Note';
+        const sevVal = el('manualIssueSeverity')?.value || 'high';
+        const msgVal = el('manualIssueMessage')?.value?.trim() || `[Reviewer] Yêu cầu kiểm tra Track #${tVal || '—'} tại Frame ${fVal}`;
+
+        const newIss = {
+          id: `manual:${Date.now()}:${tVal || 'all'}:${fVal}`,
+          type: typeVal,
+          frame: fVal,
+          track_id: tVal !== '' ? Number(tVal) : null,
+          severity: sevVal,
+          message: msgVal,
+          manual: true,
+          created_by: S.user?.username || 'Reviewer',
+          created_at: new Date().toISOString(),
+          fix_data: otVal !== '' ? { pair: `${tVal}_${otVal}`, target: Number(otVal) } : {},
+          data: otVal !== '' ? { pair: `${tVal}_${otVal}`, target: Number(otVal) } : {}
+        };
+
+        S.issues.unshift(newIss);
+        closeDialog();
+        renderIssues();
+        metrics();
+        draw();
+        toast(`Đã thêm Issue: Frame ${newIss.frame}${newIss.track_id !== null ? ' Track #' + newIss.track_id : ''}`);
+      }
+    }
+  ];
+
+  if (isCvat) {
+    buttons.push({
+      label: '⚡ Đẩy ngay lên CVAT',
+      className: 'primary',
+      onClick: async () => {
+        const fVal = Number(el('manualIssueFrame')?.value || frame);
+        const tVal = el('manualIssueTrack')?.value?.trim();
+        const otVal = el('manualIssueOtherTrack')?.value?.trim();
+        const typeVal = el('manualIssueType')?.value || 'Custom Reviewer Note';
+        const sevVal = el('manualIssueSeverity')?.value || 'high';
+        const msgVal = el('manualIssueMessage')?.value?.trim() || `[Reviewer] Yêu cầu kiểm tra Track #${tVal || '—'} tại Frame ${fVal}`;
+
+        const newIss = {
+          id: `manual:${Date.now()}:${tVal || 'all'}:${fVal}`,
+          type: typeVal,
+          frame: fVal,
+          track_id: tVal !== '' ? Number(tVal) : null,
+          severity: sevVal,
+          message: msgVal,
+          manual: true,
+          pushed_to_cvat: true,
+          created_by: S.user?.username || 'Reviewer',
+          created_at: new Date().toISOString(),
+          fix_data: otVal !== '' ? { pair: `${tVal}_${otVal}`, target: Number(otVal) } : {},
+          data: otVal !== '' ? { pair: `${tVal}_${otVal}`, target: Number(otVal) } : {}
+        };
+
+        closeDialog();
+        try {
+          setBusy(true);
+          const res = await api('cvat/job/raise-issue', {
+            job_id: S.cvatJob.id,
+            type: typeVal,
+            frame: fVal,
+            track_id: tVal !== '' ? Number(tVal) : null,
+            other_id: otVal !== '' ? Number(otVal) : null,
+            message: msgVal
+          });
+          S.issues.unshift(newIss);
+          renderIssues();
+          metrics();
+          draw();
+          toast(res.message || `Đã tạo Issue thành công trên CVAT tại Frame ${fVal}!`);
+        } catch(e) {
+          toast(`Lỗi khi tạo issue lên CVAT: ${e.message}`, true);
+        } finally {
+          setBusy(false);
+        }
+      }
+    });
+  }
+
+  openDialog('Tạo Issue kiểm định (Reviewer Raise Issue)', html, buttons);
 }
 
 async function openTuneThresholdsDialog(){
@@ -1554,6 +1758,31 @@ function wire(){
    toast(`Đã quét lại lỗi theo cấu hình ${S.activeConfig || 'config_project_3.yaml'} và dữ liệu hiện tại.`);
   }catch(e){toast(e.message,true)}finally{setBusy(false)}
  };
+ if(el('cvatConfigSelect')) {
+  el('cvatConfigSelect').onchange = () => {
+   S.activeConfig = el('cvatConfigSelect').value;
+   if(el('cvatWorkspaceConfigSelect')) el('cvatWorkspaceConfigSelect').value = S.activeConfig;
+  };
+ }
+ if(el('cvatWorkspaceConfigSelect')) {
+  el('cvatWorkspaceConfigSelect').onchange = async () => {
+   const newCfg = el('cvatWorkspaceConfigSelect').value;
+   S.activeConfig = newCfg;
+   if(el('cvatConfigSelect')) el('cvatConfigSelect').value = newCfg;
+   if(S.cvatJob && S.boxes.length) {
+    toast(`Đang quét lại lỗi theo cấu hình: ${newCfg}...`);
+    try {
+     setBusy(true);
+     await scan();
+     toast(`Đã quét lại lỗi theo cấu hình ${newCfg}`);
+    } catch(e) {
+     toast(`Lỗi khi quét: ${e.message}`, true);
+    } finally {
+     setBusy(false);
+    }
+   }
+  };
+ }
  if(el('btnGoToCvatJobs')) el('btnGoToCvatJobs').onclick=()=>showPage('cvatJobs');
  if(el('btnCanvasGoToJobs')) el('btnCanvasGoToJobs').onclick=()=>showPage('cvatJobs');
  el('btnCvatReject').onclick=rejectCvatJobDialog;
@@ -1710,6 +1939,12 @@ el('btnExport').onclick=()=>{if(canEdit())exportDialog()};
  [{label:'Hủy',onClick:closeDialog},{label:'Swap ID',className:'primary',onClick:()=>{const d={a:src.track_id,b:Number(el('swapTarget').value),from_frame:Number(el('swapStart').value)};closeDialog();doFix('swap_ids',d)}}])};
 
  el('btnCreateMode').onclick=()=>{if(!canEdit())return toast('Reviewer không được vẽ bounding box.',true);S.isCreate=!S.isCreate;el('btnCreateMode').classList.toggle('active',S.isCreate);toast(S.isCreate?'Kéo chuột để tạo bounding box.':'Đã tắt chế độ vẽ box')};
+ if(el('btnCreateIssue')) el('btnCreateIssue').onclick=()=>openCreateIssueDialog();
+ if(el('btnToolbarRaiseIssue')) el('btnToolbarRaiseIssue').onclick=()=>openCreateIssueDialog({frame:S.frame});
+ if(el('btnBoxRaiseIssue')) el('btnBoxRaiseIssue').onclick=()=>{
+   const curBox = S.boxes.find(b => b.uid === S.selectedUid);
+   openCreateIssueDialog({track_id: curBox?.track_id, frame: S.frame});
+ };
  el('issueFilter').onchange=renderIssues;el('btnQuality').onclick=async()=>{if(!S.boxes.length)return;try{const r=await api('quality',{boxes:S.boxes,...readMeta(),project_id:S.projectId});openDialog('Quality Gate',
  `<p><b>${r.pass_gate?'PASS':'CHƯA PASS'}</b></p><p>${r.structural_blockers.length} lỗi cấu trúc chặn xuất sạch. ${r.unresolved_high.length} cảnh báo HIGH chưa xử lý; ${(r.pending_handoffs||[]).length} yêu cầu chưa kết thúc QC.</p><p>${htmlEscape(r.disclaimer)}</p>`,[{label:'Đóng',onClick:closeDialog}])}catch(e){toast(e.message,true)}};
  el('navWorkspace').onclick=()=>showPage('workspace');el('navReport').onclick=()=>showPage('report');el('navAudit').onclick=()=>showPage('audit');
@@ -1992,6 +2227,7 @@ async function initAuth(){
    updateRoleUI();
    await loadOrganizations();
    initOrgSelector();
+   await loadCvatConfigs();
    showPage('cvatJobs');
    renderCvatJobs();
    toast('Đã đăng nhập qua CVAT: '+username+' ('+r.user.role+')');
@@ -2044,4 +2280,4 @@ async function openUserDialog(){
   toast(`Lỗi khi tải danh sách người dùng: ${e.message}`,true);
  }
 }
-wire();refreshAll();updateProjectTitle();initAuth();
+wire();refreshAll();updateProjectTitle();loadCvatConfigs();initAuth();

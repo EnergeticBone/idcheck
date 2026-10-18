@@ -470,6 +470,7 @@ def open_cvat_job(req, actor):
         "frame_base": start_f,
         "config": config_name,
         "include_merges": True,
+        "job_id": job_id,
     }
     scan_res = scan(scan_body)
 
@@ -608,6 +609,40 @@ def reject_and_raise_issues(req, actor):
         "total_alerts": len(alerts),
         "results": created_results,
         "message": f"Đã raise {len(alerts)} issues lên CVAT và trả lại Job #{job_id} cho Annotator ({returned_to}).",
+    }
+
+
+def raise_single_issue(req, actor):
+    """Reviewer tự tạo 1 Issue trực tiếp trên CVAT tại frame/box được chỉ định."""
+    job_id = int(req.get("job_id"))
+    client = _get_active_client()
+    job = client.jobs.retrieve(job_id)
+
+    tracks, _ = load_job_tracks(client, job_id, interpolate=True)
+    issue_data = req.get("issue") if isinstance(req.get("issue"), dict) else req
+    raw_type = str(issue_data.get("type", "reviewer_issue")).lower().replace(" ", "_")
+
+    tid = issue_data.get("track_id")
+    track_id = int(tid) if tid is not None and str(tid).strip() != "" and str(tid).isdigit() else None
+
+    other = issue_data.get("other_id")
+    other_id = int(other) if other is not None and str(other).strip() != "" and str(other).isdigit() else None
+
+    alert = {
+        "type": raw_type,
+        "track_id": track_id,
+        "frame": int(issue_data.get("frame", 0)),
+        "detail": str(issue_data.get("message") or issue_data.get("detail") or "Issue do Reviewer tự raise"),
+        "other_id": other_id,
+    }
+    created_results = post_alerts_as_issues(client, job_id, [alert], tracks=tracks, skip_duplicates=False)
+    created_ok = any(r.get("status") == "created" for r in created_results)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "alert": alert,
+        "results": created_results,
+        "message": f"Đã raise Issue thành công lên CVAT tại Frame {alert['frame']}." if created_ok else "Đã gửi yêu cầu tạo Issue lên CVAT."
     }
 
 

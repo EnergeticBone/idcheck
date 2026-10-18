@@ -115,7 +115,7 @@ class Handler(SimpleHTTPRequestHandler):
         workflow_routes={'/api/workflow/list','/api/workflow/transition'}
         cvat_routes={'/api/cvat/jobs','/api/cvat/job/submit-validation','/api/cvat/job/open',
                      '/api/cvat/organizations','/api/cvat/organization/set',
-                     '/api/cvat/job/reject-and-raise','/api/cvat/job/accept','/api/cvat/job/assign',
+                     '/api/cvat/job/reject-and-raise','/api/cvat/job/raise-issue','/api/cvat/job/accept','/api/cvat/job/assign',
                      '/api/cvat/users','/api/cvat/job/push','/api/cvat/configs','/api/cvat/calibrate'}
         benchmark_routes={'/api/benchmark/evaluate'}
         if route not in ('/api/media/upload-zip','/api/video/upload','/api/annotation/import') and route not in ROUTES and route not in PROJECT_ROUTES and route not in auth_routes and route not in workflow_routes and route not in cvat_routes and route not in benchmark_routes:
@@ -172,6 +172,7 @@ class Handler(SimpleHTTPRequestHandler):
             if route=='/api/cvat/job/submit-validation':return self.json(cvat_workflow.submit_for_validation(req,actor))
             if route=='/api/cvat/job/open':return self.json(cvat_workflow.open_cvat_job(req,actor))
             if route=='/api/cvat/job/reject-and-raise':return self.json(cvat_workflow.reject_and_raise_issues(req,actor))
+            if route=='/api/cvat/job/raise-issue':return self.json(cvat_workflow.raise_single_issue(req,actor))
             if route=='/api/cvat/job/accept':return self.json(cvat_workflow.accept_job(req,actor))
             if route=='/api/cvat/job/assign':return self.json(cvat_workflow.assign_job(req,actor))
             if route=='/api/cvat/users':return self.json(cvat_workflow.list_cvat_users(actor))

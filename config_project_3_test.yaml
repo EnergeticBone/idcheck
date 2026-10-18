@@ -23,6 +23,16 @@ default:
   swap_cross_ratio: 0.5
   compensate_camera: true
   cam_min_tracks: 4
+  # Horizon-Aware Filter (lọc nhiễu box siêu nhỏ ở dải chân trời xe tự hành)
+  enable_horizon_filter: true
+  horizon_band: [0.32, 0.54]     # Dải chân trời camera (32% - 54% chiều cao ảnh)
+  horizon_min_h: 20              # Chiều cao tối thiểu ở dải chân trời (px)
+  horizon_min_w: 18              # Chiều rộng tối thiểu ở dải chân trời (px)
+  horizon_min_area: 360          # Diện tích tối thiểu (px^2)
+  # Re-ID Size Gating Filter (kích thước tối thiểu để kích hoạt trích xuất đặc trưng Re-ID)
+  reid_min_w: 20
+  reid_min_h: 20
+  reid_min_area: 380
 classes:
   car:
     max_speed: 10.0

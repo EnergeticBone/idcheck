@@ -49,6 +49,17 @@
           </div>
         </div>
         <div class="cvat-banner-actions">
+          <div class="cvat-filter-item" style="margin-right:4px;display:inline-flex;align-items:center;gap:6px;">
+            <label style="color:#94a3b8;font-size:11px;font-weight:600;">Cấu hình:</label>
+            <select id="cvatWorkspaceConfigSelect" style="padding:4px 8px;font-size:12px;background:#1e293b;color:#f8fafc;border:1px solid #374151;border-radius:6px;max-width:220px;" title="Cấu hình rule kiểm tra đang áp dụng cho Job này">
+              <option value="config_project_3.yaml">config_project_3.yaml (BDD100K 5 FPS)</option>
+              <option value="config_project_3_optimized.yaml">config_project_3_optimized.yaml (BDD100K Tối ưu)</option>
+              <option value="config_project_3_test.yaml">config_project_3_test.yaml (BDD100K Test)</option>
+              <option value="config_project_3_test2.yaml">config_project_3_test2.yaml (BDD100K Test 2)</option>
+              <option value="config_mot17.yaml">config_mot17.yaml (MOT17 Benchmark)</option>
+              <option value="config_base.yaml">config_base.yaml (Mặc định)</option>
+            </select>
+          </div>
           <button id="btnCvatSubmitValidation" class="primary small" title="Chuyển Job này sang giai đoạn Validation để Reviewer tiến hành QC" hidden>⚡ Chuyển sang QC</button>
           <button id="btnCvatRescan" class="outline small" title="Quét lại toàn bộ lỗi theo các thay đổi mới nhất">◎ Quét lại lỗi</button>
           <button id="btnCvatPush" class="outline small" title="Nén keyframe (RDP <0.5px), tự động backup và ghi đè nhãn sạch lên CVAT">↑ Đẩy nhãn về CVAT</button>
@@ -85,7 +96,7 @@
       </section>
       <section class="workspace" id="workspace">
         <div class="viewer-pane">
-          <div class="pane-head"><div><h2>Frame Inspector</h2><p>Reviewer chỉ QC và chuyển lỗi về Annotator; Annotator mới chỉnh sửa box</p></div><div class="toolbar"><button id="btnPrev" title="Frame trước">❮</button><span class="frame-indicator" id="frameLabel">Frame —</span><button id="btnNext" title="Frame sau">❯</button><button id="btnCreateMode" title="Vẽ box mới">＋ Box</button><button id="btnUndo" title="Hoàn tác" disabled>↶</button><button id="btnRedo" title="Làm lại" disabled>↷</button></div></div>
+          <div class="pane-head"><div><h2>Frame Inspector</h2><p>Reviewer chỉ QC và chuyển lỗi về Annotator; Annotator mới chỉnh sửa box</p></div><div class="toolbar"><button id="btnPrev" title="Frame trước">❮</button><span class="frame-indicator" id="frameLabel">Frame —</span><button id="btnNext" title="Frame sau">❯</button><button id="btnCreateMode" title="Vẽ box mới">＋ Box</button><button id="btnToolbarRaiseIssue" class="btn-tiny" style="padding:4px 8px;font-size:12px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);color:#fbbf24;" title="Báo lỗi tại frame hiện tại">🚩 Báo lỗi</button><button id="btnUndo" title="Hoàn tác" disabled>↶</button><button id="btnRedo" title="Làm lại" disabled>↷</button></div></div>
           <div class="media-info" id="mediaInfo">Chưa có ảnh</div><div class="canvas-wrap" id="canvasWrap">
             <div class="canvas-zoom-controls" id="zoomControls">
               <button id="btnZoomOut" title="Thu nhỏ (Cuộn chuột xuống hoặc phím -)">−</button>
@@ -112,6 +123,7 @@
                 <button id="btnSaveBox" disabled class="primary small" title="Lưu thay đổi box">Lưu</button>
                 <button id="btnStitch" disabled class="outline small" title="Nối ID">Nối ID</button>
                 <button id="btnSwap" disabled class="outline small" title="Swap ID">Swap</button>
+                <button id="btnBoxRaiseIssue" class="outline small" style="border-color:#f59e0b;color:#f59e0b;" title="Báo lỗi cho Track này">🚩 Báo lỗi Track</button>
                 <button id="btnDeleteBox" disabled class="danger small" title="Xóa box">Xóa</button>
                 <button id="btnDeselectBox" class="ghost small" title="Bỏ chọn (Esc)" hidden>✕</button>
               </div>
@@ -157,11 +169,15 @@
           <!-- Tab 1: Issues QA List -->
           <div id="sidePaneIssues">
             <div class="issues-head">
-              <h2>Issues <span class="circle" id="issueCountSub">0</span></h2>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">
+                <h2>Issues <span class="circle" id="issueCountSub">0</span></h2>
+                <button id="btnCreateIssue" class="primary small" style="background:#2563eb;color:#fff;border-radius:6px;font-weight:600;padding:4px 9px;font-size:12px;" title="Reviewer tự tạo Issue cảnh báo cho Annotator">＋ Báo lỗi (Raise)</button>
+              </div>
               <p>Reviewer gửi yêu cầu sửa → Annotator xử lý → Reviewer xác nhận</p>
               <div class="issue-filters">
                 <select id="issueFilter">
                   <option value="all">Tất cả lỗi</option>
+                  <option value="manual">✍️ Reviewer tự raise</option>
                   <option value="open">Chưa review / Cần xử lý</option>
                   <option value="handoff">Cần Annotator sửa</option>
                   <option value="fixed">Chờ Reviewer xác nhận</option>
@@ -234,6 +250,10 @@
               <label>Cấu hình:</label>
               <select id="cvatConfigSelect">
                 <option value="config_project_3.yaml">config_project_3.yaml (BDD100K 5 FPS)</option>
+                <option value="config_project_3_optimized.yaml">config_project_3_optimized.yaml (BDD100K Tối ưu)</option>
+                <option value="config_project_3_test.yaml">config_project_3_test.yaml (BDD100K Test)</option>
+                <option value="config_project_3_test2.yaml">config_project_3_test2.yaml (BDD100K Test 2)</option>
+                <option value="config_mot17.yaml">config_mot17.yaml (MOT17 Benchmark)</option>
                 <option value="config_base.yaml">config_base.yaml (Mặc định)</option>
               </select>
             </div>

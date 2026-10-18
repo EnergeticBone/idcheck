@@ -125,6 +125,73 @@ def scan(body):
                                 f"Gợi ý nối track {ta} ➜ {tb} (gap {gap} frames, score {score:.2f})",
                                 severity='medium', data={'pair': f"{ta}_{tb}", 'target': tb, 'gap': gap}))
 
+    # Visual Re-ID verification & enhancement
+    frame_getter = body.get('frame_getter')
+    job_id = body.get('job_id')
+    token = body.get('token') or body.get('video_token')
+
+    if frame_getter is None and job_id:
+        try:
+            from studio.backend.cvat_workflow import get_job_frame
+            import cv2
+            import numpy as np
+
+            _cache = {}
+
+            def _cvat_getter(fid):
+                if fid not in _cache:
+                    try:
+                        raw = get_job_frame(job_id, fid)
+                        _cache[fid] = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR) if raw else None
+                    except Exception:
+                        _cache[fid] = None
+                return _cache[fid]
+
+            frame_getter = _cvat_getter
+        except Exception as e:
+            pass
+
+    elif frame_getter is None and token:
+        try:
+            from studio.backend.video import manager
+            import cv2
+            import numpy as np
+
+            _cache = {}
+
+            def _video_getter(fid):
+                if fid not in _cache:
+                    try:
+                        raw = manager.frame(token, fid)
+                        _cache[fid] = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR) if raw else None
+                    except Exception:
+                        _cache[fid] = None
+                return _cache[fid]
+
+            frame_getter = _video_getter
+        except Exception as e:
+            pass
+
+    if frame_getter is not None and body.get('use_reid', True):
+        try:
+            from core.reid import reid_filter_and_enhance_issues, find_additional_visual_merges
+
+            issues = reid_filter_and_enhance_issues(issues, tracks, frame_getter, margin_threshold=0.05)
+
+            if body.get('include_merges', True):
+                existing_pairs = {(i.get('fix_data') or {}).get('pair') for i in issues if (i.get('fix_data') or {}).get('pair')}
+                extra_merges = find_additional_visual_merges(
+                    tracks, frame_getter, cfg, existing_pairs=existing_pairs, max_gap=15, min_visual_sim=0.75
+                )
+                for em in extra_merges:
+                    issues.append(issue(
+                        em['type'], em['frame'], em['track_id'], em['message'],
+                        severity=em['severity'], suggestion=em['suggestion'], data=em['fix_data']
+                    ))
+        except Exception as e:
+            pass
+
+
     # Phát hiện frame rỗng không có box trong video (mức LOW để đối soát)
     if mode == 'video' and total_frames is not None and rows:
         total = int(total_frames)

@@ -175,7 +175,9 @@ def evaluate(req, _actor=None):
         'total_frames': meta.get('total_frames'),
         'frame_base': meta.get('frame_base'),
         'fps': float(meta.get('fps') or 5.0),
-        'config': cfg_name
+        'config': cfg_name,
+        'job_id': req.get('job_id') or (meta.get('job_id') if isinstance(meta, dict) else None),
+        'use_reid': req.get('use_reid', True),
     })
     
     issues = scan_res['issues']
@@ -204,7 +206,9 @@ def evaluate(req, _actor=None):
             'total_frames': meta.get('total_frames'),
             'frame_base': meta.get('frame_base'),
             'fps': float(meta.get('fps') or 5.0),
-            'config': cfg_name
+            'config': cfg_name,
+            'job_id': req.get('job_id') or (meta.get('job_id') if isinstance(meta, dict) else None),
+            'use_reid': req.get('use_reid', True),
         })
         baseline.extend(normalize_gt([
             {
@@ -243,6 +247,11 @@ def evaluate(req, _actor=None):
             g2 = dict(g)
             g2['track_id'] = g['track_id'] + offset
             g2['tracks'] = [t + offset for t in g.get('tracks', [g['track_id']])]
+            orig_p = g.get('planted', '')
+            if ' ' in orig_p:
+                p_kind, p_ab = orig_p.split(' ', 1)
+                tracks_str = '⇄'.join(str(t) for t in g2['tracks'])
+                g2['planted'] = f"{p_kind} {tracks_str} (gốc XML {p_ab})"
             shifted_gt.append(g2)
         cur_tp = len(_match(pred, shifted_gt, tol))
         if cur_tp > best_tp:

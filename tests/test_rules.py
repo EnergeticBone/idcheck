@@ -164,3 +164,30 @@ def test_invalid_boxes_detected():
         1: Box(1, 100, 100, 100, 100, "car", outside=True),  # outside marker
     })
     assert check_invalid_boxes(tr3, CFG, frame_size=(1280, 720)) == []
+
+
+def test_is_horizon_box():
+    from core.rules import is_horizon_box
+
+    cfg = {
+        "default": {
+            "enable_horizon_filter": True,
+            "horizon_band": [0.32, 0.54],
+            "horizon_min_h": 20,
+            "horizon_min_w": 18,
+            "horizon_min_area": 360,
+        }
+    }
+    frame_size = (1280, 720)
+
+    # Box in horizon band (y_center = 300 / 720 = 0.417), small size: 15x15 -> True
+    b_small_horizon = Box(1, 100, 290, 115, 305, "car")  # w=15, h=15
+    assert is_horizon_box(b_small_horizon, cfg, frame_size) is True
+
+    # Box in horizon band, normal size: 50x40 -> False
+    b_large_horizon = Box(1, 100, 280, 150, 320, "car")  # w=50, h=40
+    assert is_horizon_box(b_large_horizon, cfg, frame_size) is False
+
+    # Box outside horizon band (foreground: y_center = 600 / 720 = 0.83), small size: 15x15 -> False (don't filter foreground micro-parts!)
+    b_small_foreground = Box(1, 100, 590, 115, 605, "car")
+    assert is_horizon_box(b_small_foreground, cfg, frame_size) is False
